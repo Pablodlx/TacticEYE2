@@ -1,0 +1,11 @@
+path: datasets/YOLO
+
+train: images/train
+val: images/val
+
+names:
+  0: player
+  1: ball
+  2: referee
+  3: goalkeeper
+  4: player_team_left
