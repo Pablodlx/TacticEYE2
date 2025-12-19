@@ -13,6 +13,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 import time
+from modules.team_classifier import TeamClassifier
 
 
 @dataclass
@@ -97,6 +98,20 @@ class ReIDTracker:
         ])
         
         print(f"✓ ReID Tracker inicializado en {self.device}")
+        # Team color signatures (list of HSV centroids) for team 0 and 1
+        self.team_signatures = []  # list of np.array([h,s,v]) centroids
+        self.team_update_alpha = 0.2
+        # Initialization buffer for automatic team clustering
+        self.team_init_buffer = []  # list of color signatures
+        self.team_initialized = False
+        self.team_init_samples = 40  # number of samples to collect before clustering
+        self.team_distance_threshold = 25.0
+        # Additional parameters to improve robustness
+        self.team_min_chroma = 8.0  # minimal chroma (sqrt(a^2+b^2)) to consider sample
+        self.team_min_bbox_area_ratio = 0.002  # minimal bbox area relative to image
+        self.team_confirm_samples = 3  # samples per track to confirm team
+        # Team classifier (lazy init on first frame)
+        self.team_classifier: Optional[TeamClassifier] = None
         
     def extract_features(self, image: np.ndarray, bboxes: np.ndarray) -> np.ndarray:
         """
@@ -144,6 +159,140 @@ class ReIDTracker:
             features = self.feature_extractor(batch)
         
         return features.cpu().numpy()
+
+    def compute_color_signature(self, image: np.ndarray, bbox: np.ndarray) -> np.ndarray:
+        """Compute a simple color signature (mean HSV) inside the bbox center area.
+
+        Uses a central crop of the bbox to avoid grass and background.
+        Returns an array [H,S,V]."""
+        h_img, w_img = image.shape[:2]
+        x1, y1, x2, y2 = map(int, bbox)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w_img - 1, x2), min(h_img - 1, y2)
+        if x2 <= x1 or y2 <= y1:
+            return np.array([0.0, 0.0, 0.0])
+
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0:
+            return np.array([0.0, 0.0, 0.0])
+
+        # use center 60% area
+        ch, cw = crop.shape[:2]
+        margin_h = int(ch * 0.2)
+        margin_w = int(cw * 0.2)
+        core = crop[margin_h:ch - margin_h or ch, margin_w:cw - margin_w or cw]
+        if core.size == 0:
+            core = crop
+        # Use LAB color space for better perceptual distances
+        lab = cv2.cvtColor(core, cv2.COLOR_BGR2LAB)
+        l_med = np.median(lab[:, :, 0])
+        a_med = np.median(lab[:, :, 1])
+        b_med = np.median(lab[:, :, 2])
+        return np.array([l_med, a_med, b_med], dtype=np.float32)
+
+    def _chroma(self, lab_sig: np.ndarray) -> float:
+        """Return chroma magnitude from LAB signature (a,b)."""
+        return float(np.linalg.norm(lab_sig[1:3]))
+
+    def _add_team_sample(self, color_sig: np.ndarray, bbox: np.ndarray, image_shape: tuple):
+        """Añade una firma de color al buffer de inicialización y ejecuta clustering si hay suficientes muestras."""
+        if color_sig is None or np.all(color_sig == 0):
+            return
+        if self.team_initialized:
+            return
+        # check chroma
+        chroma = self._chroma(color_sig)
+        if chroma < self.team_min_chroma:
+            return
+        # check bbox area ratio
+        img_h, img_w = image_shape[:2]
+        bbox_area = max(1, (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+        if (bbox_area / (img_h * img_w)) < self.team_min_bbox_area_ratio:
+            return
+        self.team_init_buffer.append(color_sig.copy())
+        if len(self.team_init_buffer) >= self.team_init_samples:
+            X = np.vstack(self.team_init_buffer).astype(np.float32)
+            idx0 = 0
+            idx1 = int(np.argmax([np.linalg.norm(X[i] - X[idx0]) for i in range(len(X))]))
+            c0 = X[idx0].copy()
+            c1 = X[idx1].copy()
+            for _ in range(10):
+                d0 = np.linalg.norm(X - c0, axis=1)
+                d1 = np.linalg.norm(X - c1, axis=1)
+                labels = (d1 < d0).astype(int)
+                if labels.sum() == 0 or labels.sum() == len(X):
+                    break
+                c0 = X[labels == 0].mean(axis=0)
+                c1 = X[labels == 1].mean(axis=0)
+            self.team_signatures = [c0, c1]
+            self.team_initialized = True
+            self.team_init_buffer = []
+            print(f"ReID: team clustering completed — centroids L*a*b: {self.team_signatures[0]} | {self.team_signatures[1]}")
+
+    def assign_team(self, color_sig: np.ndarray) -> int:
+        """Assign a team id (0 or 1) based on current team signatures.
+
+        If signatures are empty, create first centroid -> team 0.
+        If one exists and new signature is sufficiently different, create team 1.
+        Otherwise assign to nearest centroid.
+        """
+        # ignore invalid signatures
+        if color_sig is None or np.all(color_sig == 0):
+            return -1
+
+        def dist(a, b):
+            return np.linalg.norm(a - b)
+
+        # If not yet initialized, accumulate signatures and run a simple k-means
+        if not self.team_initialized:
+            # add to buffer
+            self.team_init_buffer.append(color_sig.copy())
+            if len(self.team_init_buffer) >= self.team_init_samples:
+                # run simple kmeans k=2 on collected signatures
+                X = np.vstack(self.team_init_buffer).astype(np.float32)
+                # init centroids: pick two farthest points
+                idx0 = 0
+                idx1 = int(np.argmax([np.linalg.norm(X[i] - X[idx0]) for i in range(len(X))]))
+                c0 = X[idx0].copy()
+                c1 = X[idx1].copy()
+                for _ in range(10):
+                    d0 = np.linalg.norm(X - c0, axis=1)
+                    d1 = np.linalg.norm(X - c1, axis=1)
+                    labels = (d1 < d0).astype(int)
+                    if labels.sum() == 0 or labels.sum() == len(X):
+                        break
+                    c0 = X[labels == 0].mean(axis=0)
+                    c1 = X[labels == 1].mean(axis=0)
+
+                self.team_signatures = [c0, c1]
+                self.team_initialized = True
+                # clear buffer to save memory
+                self.team_init_buffer = []
+                print(f"ReID: team clustering completed — centroids L*a*b: {self.team_signatures[0]} | {self.team_signatures[1]}")
+                # decide assignment for current signature
+                d0 = dist(color_sig, self.team_signatures[0])
+                d1 = dist(color_sig, self.team_signatures[1])
+                return 0 if d0 <= d1 else 1
+            else:
+                # Not enough data yet -> unknown
+                return -1
+
+        # After initialization, assign to nearest centroid only if distance below threshold
+        if len(self.team_signatures) >= 2:
+            dists = [dist(color_sig, c) for c in self.team_signatures[:2]]
+            best = int(np.argmin(dists))
+            if min(dists) > self.team_distance_threshold:
+                # too far from known teams -> unknown
+                print(f"ReID: team assignment unknown (min dist {min(dists):.1f} > threshold {self.team_distance_threshold})")
+                return -1
+            # update centroid
+            self.team_signatures[best] = (1 - self.team_update_alpha) * self.team_signatures[best] + self.team_update_alpha * color_sig
+            # debug print for assignments
+            print(f"ReID: assign team {best} (distances {dists[0]:.1f},{dists[1]:.1f})")
+            return best
+
+        # fallback
+        return -1
     
     def compute_similarity(self, feat1: np.ndarray, feat2: np.ndarray) -> float:
         """Similitud coseno entre dos features"""
@@ -208,6 +357,14 @@ class ReIDTracker:
         player_dets = detections[player_mask]
         player_scores = scores[player_mask]
         player_classes = classes[player_mask]  # Mantener clases originales
+
+        # initialize TeamClassifier lazily
+        if self.team_classifier is None:
+            self.team_classifier = TeamClassifier(image.shape,
+                                                 init_samples=self.team_init_samples,
+                                                 min_chroma=self.team_min_chroma,
+                                                 distance_threshold=self.team_distance_threshold,
+                                                 confirm_samples=self.team_confirm_samples)
         
         # Extraer features solo de jugadores
         features = self.extract_features(image, player_dets)
@@ -276,6 +433,15 @@ class ReIDTracker:
                 track.last_bbox = bbox
                 track.last_seen = current_time
                 track.feature_history.append(feat)
+                # update team classifier with this detection and possibly confirm team
+                try:
+                    if self.team_classifier is not None:
+                        self.team_classifier.add_detection(best_track_id, bbox, image, class_id=current_class)
+                        team_assigned = self.team_classifier.get_team(best_track_id)
+                        if team_assigned != -1:
+                            track.team_id = team_assigned
+                except Exception:
+                    pass
                 track.trajectory.append(self._bbox_center(bbox))
                 track.original_class = current_class
                 
@@ -290,16 +456,42 @@ class ReIDTracker:
             track_id = self.next_track_id
             self.next_track_id += 1
             
+            # initial team unknown (referee/ball handled below)
+            color_sig = self.compute_color_signature(image, bbox)
+            assigned_team = -1
+            if cls in (2,):  # referee -> no team
+                assigned_team = -1
+            elif cls == 1:  # ball
+                assigned_team = -1
+
             track = TrackState(
                 track_id=track_id,
                 last_seen=current_time,
                 last_bbox=bbox,
                 feature_history=deque([feat], maxlen=self.feature_buffer_size),
                 trajectory=deque([self._bbox_center(bbox)], maxlen=300),  # 10s @ 30fps
-                original_class=cls
+                original_class=cls,
+                color_signature=color_sig,
+                # add a small color history to confirm team over multiple frames
+                # reuse feature_history size for limit
+                
+                team_id=assigned_team
             )
+
+            # add per-track color history container
+            track.color_history = deque([color_sig], maxlen=self.team_confirm_samples)
             
             self.active_tracks[track_id] = track
+            # register sample with TeamClassifier and possibly confirm
+            try:
+                if self.team_classifier is not None:
+                    self.team_classifier.add_detection(track_id, bbox, image, class_id=cls)
+                    team_assigned = self.team_classifier.get_team(track_id)
+                    if team_assigned != -1:
+                        track.team_id = team_assigned
+            except Exception:
+                pass
+
             results.append((track_id, bbox, cls))
         
         # Mover tracks no actualizados a lost_tracks

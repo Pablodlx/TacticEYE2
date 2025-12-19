@@ -1,197 +1,183 @@
-"""
-Team Classifier - Diferenciación automática de equipos por color de camiseta
-============================================================================
-Usa K-means clustering para asignar jugadores a equipos
-"""
-
 import cv2
 import numpy as np
-from sklearn.cluster import KMeans
-from collections import Counter, defaultdict
-from typing import Dict, Tuple, Optional
+from collections import defaultdict, deque
+from typing import Optional, Tuple
 
 
 class TeamClassifier:
     """
-    Clasifica jugadores en equipos basándose en colores de camiseta
+    Classifica jugadores en dos equipos usando color del torso + clustering.
+
+    API principal:
+    - add_detection(track_id, bbox, image, class_id=None, homography=None)
+    - get_team(track_id) -> int (0/1 or -1 unknown)
+    - ready() -> bool (True cuando clustering inicial completado)
+
+    Diseño:
+    - Extrae región de torso desde la bbox (zona central-superior)
+    - Convierte a LAB, calcula firma robusta (mediana L,a,b)
+    - Acumula firmas y lanza kmeans k=2 cuando hay suficientes muestras
+    - Asigna equipos por distancia a centroides; confirma por historial temporal
+    - Usa homografía (si se provee) como prior posicional para estabilizar izquierdas/derechas
     """
-    
-    def __init__(self, n_teams: int = 3):
-        """
-        Args:
-            n_teams: Número de equipos/grupos (local, visitante, árbitro)
-        """
-        self.n_teams = n_teams
-        self.team_colors = None  # Se calculará dinámicamente
-        self.track_team_votes: Dict[int, list] = defaultdict(list)
-        self.stable_assignments: Dict[int, int] = {}
-        
-    def extract_jersey_color(self, image: np.ndarray, bbox: np.ndarray) -> np.ndarray:
-        """
-        Extrae color dominante de la camiseta (zona superior del jugador)
-        
-        Args:
-            image: Frame BGR
-            bbox: [x1, y1, x2, y2]
-            
-        Returns:
-            Color promedio en HSV [H, S, V]
-        """
+
+    def __init__(self,
+                 image_shape: Tuple[int,int],
+                 init_samples: int = 40,
+                 min_chroma: float = 6.0,
+                 distance_threshold: float = 40.0,
+                 confirm_samples: int = 3,
+                 side_prior_alpha: float = 0.2):
+        self.img_h, self.img_w = image_shape[:2]
+        self.init_samples = init_samples
+        self.min_chroma = min_chroma
+        self.distance_threshold = distance_threshold
+        self.confirm_samples = confirm_samples
+        self.side_prior_alpha = side_prior_alpha
+
+        # buffers
+        self.sample_buffer = []  # list of (lab_sig, bbox_center_x)
+        self.team_centroids = None  # np.array shape (2,3) in LAB
+        self.team_assigned_side = None  # which centroid corresponds to left/right
+
+        # per-track histories
+        self.color_history = defaultdict(lambda: deque(maxlen=self.confirm_samples))
+        self.team_history = defaultdict(lambda: deque(maxlen=self.confirm_samples))
+        self.track_team = {}  # confirmed team per track
+
+    # ------------------ color / torso helpers ------------------
+    def _extract_torso(self, image: np.ndarray, bbox: np.ndarray) -> Optional[np.ndarray]:
         x1, y1, x2, y2 = map(int, bbox)
-        h, w = image.shape[:2]
-        
-        # Clamp
-        x1 = max(0, min(x1, w-1))
-        x2 = max(0, min(x2, w))
-        y1 = max(0, min(y1, h-1))
-        y2 = max(0, min(y2, h))
-        
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(self.img_w - 1, x2), min(self.img_h - 1, y2)
         if x2 <= x1 or y2 <= y1:
-            return np.array([0, 0, 0])
-        
-        # Crop jugador
-        player_crop = image[y1:y2, x1:x2]
-        
-        if player_crop.size == 0:
-            return np.array([0, 0, 0])
-        
-        # Zona de camiseta: 20-50% de altura (torso superior)
-        crop_h = player_crop.shape[0]
-        jersey_roi = player_crop[int(crop_h * 0.2):int(crop_h * 0.5), :]
-        
-        if jersey_roi.size == 0:
-            return np.array([0, 0, 0])
-        
-        # Convertir a HSV (mejor para colores)
-        hsv = cv2.cvtColor(jersey_roi, cv2.COLOR_BGR2HSV)
-        
-        # Crear máscara para eliminar blancos/negros/grises extremos
-        lower_gray = np.array([0, 0, 50])
-        upper_gray = np.array([180, 50, 200])
-        mask = cv2.inRange(hsv, lower_gray, upper_gray)
-        mask = cv2.bitwise_not(mask)
-        
-        # Extraer píxeles válidos
-        valid_pixels = hsv[mask > 0]
-        
-        if len(valid_pixels) < 10:
-            # No hay suficientes píxeles, usar promedio simple
-            return hsv.reshape(-1, 3).mean(axis=0)
-        
-        # Color dominante = mediana de píxeles válidos
-        dominant_color = np.median(valid_pixels, axis=0)
-        
-        return dominant_color
-    
-    def classify_teams_batch(self, 
-                            image: np.ndarray, 
-                            tracks: list) -> Dict[int, int]:
-        """
-        Clasifica todos los tracks visibles en equipos USANDO EL MODELO YOLO
-        
-        Args:
-            image: Frame BGR
-            tracks: Lista de (track_id, bbox, class_id)
-            
-        Returns:
-            Dict {track_id: team_id} donde:
-              - 0, 1 = jugadores de campo por color
-              - 2 = árbitros (del modelo)
-              - 3 = porteros (se agrupan por color con su equipo)
-        """
-        if not tracks:
-            return {}
-        
-        assignments = {}
-        player_tracks = []  # players (0) y goalkeepers (3) se clasifican por color
-        
-        for tid, bbox, cls in tracks:
-            if cls == 2:  # Referee - DIRECTO DEL MODELO
-                assignments[tid] = 2
-                # Mantener votación para estabilidad
-                self.track_team_votes[tid].append(2)
-                if len(self.track_team_votes[tid]) > 30:
-                    self.track_team_votes[tid].pop(0)
-                self.stable_assignments[tid] = 2
-            else:  # Players (0) y Goalkeepers (3) - clasificar por color
-                player_tracks.append((tid, bbox, cls))
-        
-        if len(player_tracks) < 2:
-            for tid, _, _ in player_tracks:
-                assignments[tid] = 0
-            return assignments
-        
-        # Extraer colores para K-means
-        colors = []
-        track_ids = []
-        original_classes = []
-        
-        for track_id, bbox, cls in player_tracks:
-            color = self.extract_jersey_color(image, bbox)
-            colors.append(color)
-            track_ids.append(track_id)
-            original_classes.append(cls)
-        
-        colors = np.array(colors)
-        
-        # K-means para 2 equipos
-        n_clusters = min(2, len(player_tracks))
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        labels = kmeans.fit_predict(colors)
-        
-        self.team_colors = kmeans.cluster_centers_
-        
-        # Asignar con votación
-        for track_id, label, orig_cls in zip(track_ids, labels, original_classes):
-            team_id = int(label)  # 0 o 1
-            
-            # Sistema de votación (últimos 30 frames)
-            self.track_team_votes[track_id].append(team_id)
-            if len(self.track_team_votes[track_id]) > 30:
-                self.track_team_votes[track_id].pop(0)
-            
-            # Asignar por mayoría de votos
-            votes = self.track_team_votes[track_id]
-            if len(votes) >= 5:  # Mínimo 5 observaciones
-                stable_team = Counter(votes).most_common(1)[0][0]
-                self.stable_assignments[track_id] = stable_team
-                assignments[track_id] = stable_team
+            return None
+        h = y2 - y1
+        w = x2 - x1
+        # torso: upper 60% height, central 60% width
+        ty1 = y1 + int(0.12 * h)
+        ty2 = y1 + int(0.60 * h)
+        tx1 = x1 + int(0.2 * w)
+        tx2 = x1 + int(0.8 * w)
+        if ty2 <= ty1 or tx2 <= tx1:
+            return None
+        torso = image[ty1:ty2, tx1:tx2]
+        return torso
+
+    def _lab_signature(self, roi: np.ndarray) -> np.ndarray:
+        # take core center 70% to avoid edges; compute median per channel
+        h, w = roi.shape[:2]
+        mh = max(1, int(0.15 * h))
+        mw = max(1, int(0.15 * w))
+        core = roi[mh:h-mh, mw:w-mw] if h > 2*mh and w > 2*mw else roi
+        lab = cv2.cvtColor(core, cv2.COLOR_BGR2LAB)
+        l_med = np.median(lab[:,:,0])
+        a_med = np.median(lab[:,:,1])
+        b_med = np.median(lab[:,:,2])
+        return np.array([l_med, a_med, b_med], dtype=np.float32)
+
+    def _chroma(self, lab_sig: np.ndarray) -> float:
+        return float(np.linalg.norm(lab_sig[1:3]))
+
+    # ------------------ clustering ------------------
+    def _run_kmeans(self):
+        # Run kmeans on sample_buffer's lab signatures
+        X = np.array([s[0] for s in self.sample_buffer], dtype=np.float32)
+        if len(X) < 2:
+            return False
+        # use cv2.kmeans
+        K = 2
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 1.0)
+        attempts = 5
+        ret, labels, centers = cv2.kmeans(X, K, None, criteria, attempts, cv2.KMEANS_PP_CENTERS)
+        self.team_centroids = centers  # shape (2,3)
+        # determine which centroid is left/right using average bbox x in samples
+        avg_x = [0.0, 0.0]
+        counts = [0,0]
+        for (lab, cx), lbl in zip(self.sample_buffer, labels.flatten()):
+            avg_x[int(lbl)] += cx
+            counts[int(lbl)] += 1
+        for i in range(2):
+            if counts[i]>0:
+                avg_x[i] /= counts[i]
             else:
-                assignments[track_id] = team_id
-        
-        return assignments
-    
-    def _identify_referee_cluster(self, cluster_centers: np.ndarray) -> int:
+                avg_x[i] = self.img_w/2
+        # team_assigned_side[0] = index of centroid that is left side (smaller x)
+        left_idx = int(np.argmin(avg_x))
+        right_idx = 1 - left_idx
+        self.team_assigned_side = (left_idx, right_idx)
+        return True
+
+    # ------------------ public API ------------------
+    def add_detection(self, track_id: int, bbox: np.ndarray, image: np.ndarray,
+                      class_id: Optional[int] = None, homography: Optional[np.ndarray] = None):
         """
-        Identifica cuál cluster corresponde al árbitro
-        Árbitros típicamente: negro (bajo V) o colores poco saturados
+        Añade una detección (por frame) para su evaluación.
+
+        - track_id: id del track (persistente en el tracker)
+        - bbox: [x1,y1,x2,y2]
+        - image: frame BGR
+        - class_id: clase YOLO (para ignorar ball/referee)
+        - homography: optional 3x3 homography para proyectar centro
         """
-        scores = []
-        for i, center in enumerate(cluster_centers):
-            h, s, v = center
-            # Score: bajo V y/o baja S indica árbitro
-            score = (255 - v) + (255 - s) * 0.5
-            scores.append(score)
-        
-        return int(np.argmax(scores))
-    
-    def get_team_id(self, track_id: int) -> int:
-        """Obtiene team_id estable para un track"""
-        return self.stable_assignments.get(track_id, -1)
-    
-    def get_team_color_bgr(self, team_id: int) -> Optional[Tuple[int, int, int]]:
-        """Retorna color BGR para visualización de un equipo"""
-        if self.team_colors is None or team_id >= len(self.team_colors):
-            colors = [(0, 255, 0), (0, 0, 255), (255, 255, 0)]  # Verde, Rojo, Amarillo
-            return colors[team_id] if team_id < 3 else (255, 255, 255)
-        
-        hsv_color = self.team_colors[team_id].astype(np.uint8).reshape(1, 1, 3)
-        bgr_color = cv2.cvtColor(hsv_color, cv2.COLOR_HSV2BGR)[0, 0]
-        return tuple(map(int, bgr_color))
-    
-    def reset_voting(self, track_id: int):
-        """Resetea votación para un track (útil cuando reaparece)"""
-        if track_id in self.track_team_votes:
-            self.track_team_votes[track_id].clear()
-        if track_id in self.stable_assignments:
-            del self.stable_assignments[track_id]
+        # ignore ball/referee if known
+        if class_id is not None and int(class_id) in (1,2):
+            return
+
+        torso = self._extract_torso(image, bbox)
+        if torso is None:
+            return
+        lab_sig = self._lab_signature(torso)
+        chroma = self._chroma(lab_sig)
+        # ignore low-chroma samples
+        if chroma < self.min_chroma:
+            return
+
+        cx = (bbox[0] + bbox[2]) / 2.0
+        # store sample for initial clustering
+        if self.team_centroids is None:
+            self.sample_buffer.append((lab_sig, cx))
+            if len(self.sample_buffer) >= self.init_samples:
+                self._run_kmeans()
+            return
+
+        # after centroids exist, add to per-track history and try to confirm
+        self.color_history[track_id].append(lab_sig)
+        # use median of history to test
+        arr = np.vstack(list(self.color_history[track_id]))
+        med = np.median(arr, axis=0)
+        # distances to centroids
+        dists = np.linalg.norm(self.team_centroids - med[None,:], axis=1)
+        best = int(np.argmin(dists))
+        if dists[best] > self.distance_threshold:
+            # too far -> mark unknown for now
+            self.team_history[track_id].append(-1)
+        else:
+            # map centroid index to team id (0 = home/left, 1 = away/right)
+            left_idx, right_idx = self.team_assigned_side
+            team = 0 if best == left_idx else 1
+            self.team_history[track_id].append(team)
+
+        # confirm if history majority agrees
+        vals = [v for v in self.team_history[track_id] if v != -1]
+        if len(vals) >= self.confirm_samples:
+            # majority vote
+            team_confirmed = int(np.bincount(vals).argmax())
+            prev = self.track_team.get(track_id, None)
+            if prev is None or prev != team_confirmed:
+                # apply hysteresis: only change if confirmed
+                self.track_team[track_id] = team_confirmed
+
+    def get_team(self, track_id: int) -> int:
+        return int(self.track_team.get(track_id, -1))
+
+    def ready(self) -> bool:
+        return self.team_centroids is not None
+
+    def reset(self):
+        self.sample_buffer = []
+        self.team_centroids = None
+        self.team_assigned_side = None
+        self.color_history.clear()
+        self.team_history.clear()
+        self.track_team.clear()
