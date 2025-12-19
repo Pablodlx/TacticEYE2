@@ -1,0 +1,66 @@
+# TacticEYE2 Configuration
+# ========================
+
+# Model Configuration
+model:
+  path: "weights/best.pt"
+  conf_threshold: 0.3
+  iou_threshold: 0.5
+  img_size: 1280
+
+# Tracking Configuration
+tracking:
+  max_age: 90  # frames sin detección
+  max_lost_time: 60.0  # segundos fuera de pantalla
+  feature_buffer_size: 10
+  similarity_threshold: 0.6
+
+# Team Classification
+teams:
+  n_teams: 3  # local, visitante, árbitro
+  voting_frames: 30  # frames para estabilizar clasificación
+
+# Field Calibration
+field:
+  length: 105.0  # metros
+  width: 68.0    # metros
+  auto_calibrate: true
+  calibration_frame: 100  # frame para calibración automática
+
+# Heatmaps
+heatmaps:
+  field_size: [1050, 680]  # píxeles (10px = 1m)
+  update_interval: 5.0  # segundos
+  history_seconds: 60.0
+  grid_resolution: 50
+
+# Statistics
+statistics:
+  ball_possession_radius: 3.0  # metros
+  pass_max_distance: 40.0  # metros
+  fps: 30
+
+# Overlay
+overlay:
+  show_ids: true
+  show_trajectories: true
+  show_minimap: true
+  show_stats: true
+  trajectory_length: 300  # frames (10s @ 30fps)
+  minimap_position: "bottom-right"
+  minimap_size_ratio: 0.25
+
+# Export
+export:
+  output_dir: "./outputs"
+  video_codec: "mp4v"
+  export_csv: true
+  export_json: true
+  export_heatmaps: true
+  export_trajectories: true
+
+# Processing
+processing:
+  show_preview: true
+  max_frames: null  # null = procesar todo el vídeo
+  preview_max_width: 1920

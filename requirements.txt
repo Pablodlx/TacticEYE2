@@ -1,0 +1,32 @@
+# TacticEYE2 - Dependencias
+# ==========================
+
+# Core
+numpy>=1.21.0
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# YOLO & Tracking
+ultralytics>=8.0.0
+
+# Machine Learning
+scikit-learn>=1.2.0
+
+# Data & Export
+pandas>=2.0.0
+pyyaml>=6.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utils
+tqdm>=4.65.0
+pillow>=9.5.0
+
+# Optional: For better ReID (uncomment if needed)
+# torchreid>=0.2.5
