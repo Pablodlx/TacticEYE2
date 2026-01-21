@@ -1,3 +1,20 @@
+# Ignore large video files (prevent pushing heavy mp4s)
+# Add specific patterns if needed for other media types
+*.mp4
+*.MP4
+
+# Optionally ignore other large video formats
+*.mov
+*.MOV
+*.avi
+
+# Keep repository folders but ignore generated outputs (uncomment if desired)
+# outputs/
+# outputs_test/
+# outputs_full/
+
+# Debug artifacts
+# debug_*/
 # Python
 __pycache__/
 *.py[cod]
