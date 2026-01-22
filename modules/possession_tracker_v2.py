@@ -52,12 +52,18 @@ class PossessionTrackerV2:
         
         # Estado interno
         self.current_possession_team: Optional[int] = None
+        self.current_possession_player: Optional[int] = None
         self.last_frame_id: int = 0
         
         # Acumuladores de tiempo (en frames)
         self.total_frames_by_team: Dict[int, int] = {}
         for team_id in range(max_teams):
             self.total_frames_by_team[team_id] = 0
+        
+        # Contador de pases por equipo
+        self.passes_by_team: Dict[int, int] = {}
+        for team_id in range(max_teams):
+            self.passes_by_team[team_id] = 0
         
         # Timeline de posesiones: [(start_frame, end_frame, team_id), ...]
         self.possession_timeline: List[Tuple[int, int, int]] = []
@@ -72,18 +78,20 @@ class PossessionTrackerV2:
         # Flag de inicialización
         self._initialized = False
     
-    def update(self, frame_id: int, ball_owner_team: Optional[int]) -> None:
+    def update(self, frame_id: int, ball_owner_team: Optional[int], ball_owner_player: Optional[int] = None) -> None:
         """
         Actualizar posesión con información de un nuevo frame.
         
         Args:
             frame_id: ID del frame actual (debe ser monotónicamente creciente)
             ball_owner_team: Equipo del poseedor del balón (None si no hay poseedor claro)
+            ball_owner_player: ID del jugador que posee el balón (None si no hay poseedor claro)
         
         Reglas:
         - Si ball_owner_team es None: el tiempo se asigna al equipo actual
         - Si ball_owner_team != current_possession_team: se aplica histeresis
         - El cambio se confirma solo tras hysteresis_frames consecutivos
+        - Si cambia player_id pero no team_id: se cuenta como PASE
         """
         # Validación básica
         if frame_id < self.last_frame_id:
@@ -102,7 +110,7 @@ class PossessionTrackerV2:
         # Caso 1: Inicio del tracking (sin posesión previa)
         if not self._initialized:
             if ball_owner_team is not None:
-                self._initialize_possession(frame_id, ball_owner_team)
+                self._initialize_possession(frame_id, ball_owner_team, ball_owner_player)
             # Si ball_owner_team es None al inicio, esperamos
             self.last_frame_id = frame_id
             return
@@ -121,6 +129,18 @@ class PossessionTrackerV2:
             # Continúa la posesión del mismo equipo
             self._candidate_buffer.clear()
             self._pending_change_team = None
+            
+            # Detectar PASE: mismo equipo, diferente jugador
+            if ball_owner_player is not None and self.current_possession_player is not None:
+                if ball_owner_player != self.current_possession_player:
+                    # Cambio de jugador dentro del mismo equipo = PASE
+                    self.passes_by_team[ball_owner_team] += 1
+                    # print(f"[Pass] Team {ball_owner_team}: Player {self.current_possession_player} → {ball_owner_player} @ frame {frame_id}")
+            
+            # Actualizar jugador actual
+            if ball_owner_player is not None:
+                self.current_possession_player = ball_owner_player
+            
             self.last_frame_id = frame_id
             return
         
@@ -130,9 +150,10 @@ class PossessionTrackerV2:
         
         self.last_frame_id = frame_id
     
-    def _initialize_possession(self, frame_id: int, team_id: int) -> None:
+    def _initialize_possession(self, frame_id: int, team_id: int, player_id: Optional[int] = None) -> None:
         """Inicializar la primera posesión del partido."""
         self.current_possession_team = int(team_id)
+        self.current_possession_player = player_id
         self._current_segment_start = frame_id
         self._initialized = True
         # Asignar el frame de inicialización
@@ -181,6 +202,7 @@ class PossessionTrackerV2:
         
         # Cambiar equipo en posesión
         self.current_possession_team = int(new_team_id)
+        self.current_possession_player = None  # Reset player al cambiar equipo
         self._current_segment_start = frame_id
         
         # Resetear histeresis
@@ -197,7 +219,8 @@ class PossessionTrackerV2:
             Dict con:
             - total_frames: Total de frames procesados
             - total_seconds: Total de tiempo en segundos
-            - possession_frames: {team_id: frames} 
+            - possession_frames: {team_id: frames}
+            - passes: {team_id: num_passes} 
             - possession_seconds: {team_id: seconds}
             - possession_percent: {team_id: percentage}
         """
@@ -220,7 +243,8 @@ class PossessionTrackerV2:
             'total_seconds': total_seconds,
             'possession_frames': self.total_frames_by_team.copy(),
             'possession_seconds': possession_seconds,
-            'possession_percent': possession_percent
+            'possession_percent': possession_percent,
+            'passes': self.passes_by_team.copy()
         }
     
     def get_possession_timeline(self) -> List[Tuple[int, int, int]]:

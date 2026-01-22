@@ -172,6 +172,15 @@ def main():
         
         frame_no += 1
         
+        # Mostrar estadísticas de pases cada 1000 frames
+        if frame_no > 0 and frame_no % 1000 == 0 and possession is not None:
+            stats = possession.get_possession_stats()
+            passes = stats.get('passes', {})
+            print(f"\n[Pases @ frame {frame_no}]")
+            for team_id in sorted(passes.keys()):
+                print(f"  Team {team_id}: {passes[team_id]} pases")
+            print()
+        
         # Detección YOLO
         results = model(
             frame,
@@ -275,7 +284,7 @@ def main():
                     ball_owner_team = None
                 
                 # Actualizar PossessionTrackerV2
-                possession.update(frame_no, ball_owner_team)
+                possession.update(frame_no, ball_owner_team, ball_owner_id)
                 
                 # Visualizar estadísticas de posesión
                 stats = possession.get_possession_stats()
