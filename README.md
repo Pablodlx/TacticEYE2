@@ -1,11 +1,12 @@
-# ⚽ TacticEYE2 - Sistema Simplificado de Análisis de Fútbol
+# ⚽ TacticEYE2 - Sistema de Análisis de Fútbol
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)](https://pytorch.org/)
 [![YOLO](https://img.shields.io/badge/YOLO-11-green)](https://github.com/ultralytics/ultralytics)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-Sistema simplificado de análisis de partidos de fútbol con 3 funcionalidades core: **Tracking con ReID**, **Clasificación de Equipos** y **Detección de Posesión**.
+Sistema de análisis de partidos de fútbol con **interfaz web** y funcionalidades core: **Tracking con ReID**, **Clasificación de Equipos**, **Detección de Posesión** y **Contador de Pases**.
 
 ## 🎯 Funcionalidades Core
 
@@ -17,7 +18,6 @@ Sistema simplificado de análisis de partidos de fútbol con 3 funcionalidades c
 
 ### 2️⃣ **Clasificación Automática de Equipos**
 - ✅ **TeamClassifierV2**: Clustering K-means en espacio LAB con eliminación de verde
-- ✅ **TeamClassifierV3**: Sistema avanzado con recalibración automática
 - ✅ Detección automática de árbitros
 - ✅ Sistema de votación temporal para estabilidad
 
@@ -29,6 +29,18 @@ Sistema simplificado de análisis de partidos de fútbol con 3 funcionalidades c
 - ✅ Timeline completo de cambios de posesión
 - ✅ Estadísticas en tiempo real (%, frames, segundos)
 - ✅ Visualización con rectángulo amarillo y línea al balón
+
+### 4️⃣ **Contador de Pases** 🆕
+- ✅ Detección automática de pases entre jugadores del mismo equipo
+- ✅ Estadísticas acumuladas por equipo
+- ✅ Visualización en tiempo real
+
+### 5️⃣ **Interfaz Web** 🆕
+- ✅ Aplicación web completa con FastAPI
+- ✅ Subida de videos y análisis en tiempo real
+- ✅ Gráficos interactivos con Chart.js
+- ✅ WebSocket para actualizaciones en vivo
+- ✅ Dashboard responsive con Bootstrap
 
 ## 📋 Requisitos
 
@@ -61,6 +73,7 @@ venv\Scripts\activate  # Windows
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements_web.txt  # Para la aplicación web
 ```
 
 ### 4. Verificar instalación
@@ -70,7 +83,30 @@ python setup_check.py
 
 ## 🎮 Uso
 
-### Comando Básico
+### 🌐 Aplicación Web (Recomendado)
+
+1. **Iniciar servidor:**
+```bash
+python app.py
+```
+
+2. **Abrir en navegador:**
+```
+http://localhost:8000
+```
+
+3. **Usar la interfaz:**
+   - Subir video (.mp4, .avi, etc.)
+   - El análisis comenzará automáticamente
+   - Ver estadísticas en tiempo real:
+     - Posesión por equipo (%)
+     - Pases completados
+     - Timeline de posesión
+     - Gráficos interactivos
+
+### 💻 Línea de Comandos
+
+#### Comando Básico
 ```bash
 python pruebatrackequipo.py video.mp4 --model weights/best.pt --reid
 ```
@@ -83,6 +119,8 @@ python pruebatrackequipo.py video.mp4 \
     --use-v3 \
     --v3-recalibrate 300
 ```
+
+**Nota:** TeamClassifierV3 no está disponible actualmente. Usar V2 por defecto.
 
 ### Posesión con Alta Precisión
 ```bash

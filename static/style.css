@@ -1,0 +1,495 @@
+/* ====================
+   Wyscout-style Professional Theme
+   ==================== */
+
+:root {
+    --primary-blue: #0a2540;
+    --secondary-blue: #1e3a5f;
+    --accent-green: #00d4aa;
+    --accent-blue: #3b82f6;
+    --dark-bg: #0f1419;
+    --card-bg: #1a1f2e;
+    --border-color: #2d3748;
+    --text-primary: #ffffff;
+    --text-secondary: #a0aec0;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #0a2540 0%, #0f1419 100%);
+    color: var(--text-primary);
+    min-height: 100vh;
+}
+
+/* ====================
+   Navigation
+   ==================== */
+
+.bg-tactic {
+    background: linear-gradient(135deg, #0a2540 0%, #1e3a5f 100%) !important;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    border-bottom: 2px solid var(--accent-green);
+}
+
+.brand-logo {
+    width: 50px;
+    height: 50px;
+    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: white;
+    box-shadow: 0 4px 12px rgba(0, 212, 170, 0.4);
+}
+
+.brand-name {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.brand-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ====================
+   Main Container
+   ==================== */
+
+.main-container {
+    min-height: calc(100vh - 70px);
+    padding: 20px 0;
+}
+
+/* ====================
+   Analysis Panels
+   ==================== */
+
+.analysis-panel {
+    background: rgba(26, 31, 46, 0.95);
+    border-radius: 16px;
+    padding: 0;
+    margin-bottom: 24px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(10px);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.analysis-panel:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.panel-header {
+    padding: 24px 30px;
+    border-bottom: 1px solid var(--border-color);
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(0, 212, 170, 0.1) 100%);
+}
+
+.panel-title {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.panel-title i {
+    color: var(--accent-green);
+}
+
+.panel-subtitle {
+    margin: 8px 0 0 0;
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.panel-body {
+    padding: 30px;
+}
+
+/* ====================
+   Upload Zone
+   ==================== */
+
+.upload-zone {
+    border: 3px dashed var(--border-color);
+    border-radius: 16px;
+    padding: 60px 40px;
+    text-align: center;
+    transition: all 0.3s ease;
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.upload-zone:hover {
+    border-color: var(--accent-green);
+    background: rgba(0, 212, 170, 0.1);
+    transform: scale(1.02);
+}
+
+.upload-icon {
+    font-size: 72px;
+    color: var(--accent-blue);
+    margin-bottom: 20px;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+
+.upload-zone h4 {
+    font-size: 24px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+/* ====================
+   Buttons
+   ==================== */
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    border: none;
+    padding: 12px 32px;
+    font-weight: 600;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3);
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 212, 170, 0.5);
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    border: none;
+    padding: 12px 32px;
+    font-weight: 600;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+
+.btn-success:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(16, 185, 129, 0.5);
+}
+
+/* ====================
+   Progress Bar
+   ==================== */
+
+.progress-container {
+    padding: 20px 0;
+}
+
+.progress-bar-custom {
+    width: 100%;
+    height: 60px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 30px;
+    position: relative;
+    overflow: hidden;
+    border: 2px solid var(--border-color);
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    border-radius: 30px;
+    transition: width 0.5s ease;
+    box-shadow: 0 0 20px rgba(0, 212, 170, 0.6);
+    position: relative;
+    overflow: hidden;
+}
+
+.progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.progress-percent {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 24px;
+    font-weight: 700;
+    color: white;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    z-index: 10;
+}
+
+.progress-stats {
+    display: flex;
+    justify-content: space-around;
+    gap: 20px;
+}
+
+.stat-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 24px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    flex: 1;
+}
+
+.stat-item i {
+    font-size: 24px;
+    color: var(--accent-green);
+}
+
+.stat-item strong {
+    color: var(--accent-green);
+}
+
+/* ====================
+   Stat Cards
+   ==================== */
+
+.stat-card {
+    background: rgba(26, 31, 46, 0.95);
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transition: all 0.3s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.stat-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: white;
+    flex-shrink: 0;
+}
+
+.stat-content {
+    flex: 1;
+}
+
+.stat-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+    font-weight: 600;
+}
+
+.stat-value {
+    font-size: 32px;
+    font-weight: 700;
+    margin: 0;
+    background: linear-gradient(135deg, var(--accent-green) 0%, var(--accent-blue) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* ====================
+   Team Stats
+   ==================== */
+
+.team-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.team-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.stat-value-lg {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-green);
+}
+
+.possession-bar-container {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    max-width: 300px;
+}
+
+.possession-bar {
+    height: 24px;
+    border-radius: 12px;
+    transition: width 0.5s ease;
+    position: relative;
+}
+
+.possession-bar.team-0 {
+    background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.possession-bar.team-1 {
+    background: linear-gradient(90deg, #fa709a 0%, #fee140 100%);
+}
+
+.possession-bar-container span {
+    min-width: 50px;
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--accent-green);
+}
+
+/* ====================
+   Charts
+   ==================== */
+
+canvas {
+    max-height: 350px;
+}
+
+/* ====================
+   Alerts
+   ==================== */
+
+.alert-info {
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid var(--accent-blue);
+    color: var(--text-primary);
+    border-radius: 8px;
+}
+
+.alert-success {
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid var(--success);
+    color: var(--text-primary);
+    border-radius: 8px;
+}
+
+.alert-danger {
+    background: rgba(239, 68, 68, 0.2);
+    border: 1px solid var(--danger);
+    color: var(--text-primary);
+    border-radius: 8px;
+}
+
+/* ====================
+   Responsive
+   ==================== */
+
+@media (max-width: 768px) {
+    .brand-text {
+        display: none;
+    }
+    
+    .stat-card {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .progress-stats {
+        flex-direction: column;
+    }
+    
+    .panel-body {
+        padding: 20px;
+    }
+}
+
+/* ====================
+   Utilities
+   ==================== */
+
+.text-muted {
+    color: var(--text-secondary) !important;
+}
+
+.badge {
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+/* ====================
+   Loading Animation
+   ==================== */
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.analysis-panel {
+    animation: fadeIn 0.5s ease;
+}

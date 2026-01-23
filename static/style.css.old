@@ -1,0 +1,185 @@
+:root {
+    --team-0-color: #00c851;
+    --team-1-color: #ff4444;
+}
+
+body {
+    background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.navbar {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.card {
+    border: none;
+    border-radius: 10px;
+    transition: transform 0.2s;
+}
+
+.card:hover {
+    transform: translateY(-2px);
+}
+
+.stat-item {
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.stat-item:last-child {
+    border-bottom: none;
+}
+
+/* Posesión */
+.possession-time {
+    padding: 20px;
+}
+
+.team-possession {
+    margin-bottom: 30px;
+}
+
+.team-possession h3 {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+    font-weight: 600;
+}
+
+.team-0 h3 {
+    color: var(--team-0-color);
+}
+
+.team-1 h3 {
+    color: var(--team-1-color);
+}
+
+.possession-bar {
+    width: 100%;
+    height: 40px;
+    background-color: #e9ecef;
+    border-radius: 20px;
+    overflow: hidden;
+    position: relative;
+}
+
+.possession-bar .bar {
+    height: 100%;
+    transition: width 0.5s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-weight: bold;
+}
+
+.bar-team-0 {
+    background: linear-gradient(90deg, var(--team-0-color), #00e676);
+}
+
+.bar-team-1 {
+    background: linear-gradient(90deg, var(--team-1-color), #ff6b6b);
+}
+
+.possession-stats {
+    margin-top: 10px;
+    font-size: 1.1rem;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Progreso */
+.progress {
+    border-radius: 10px;
+}
+
+.progress-bar {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+#progress-text {
+    font-size: 1rem;
+    color: #666;
+    margin-bottom: 0;
+}
+
+/* Botones */
+.btn-primary {
+    background-color: #007bff;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 30px;
+    font-weight: 600;
+    transition: all 0.3s;
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,.2);
+}
+
+.btn-primary:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+/* Alertas */
+.alert {
+    border-radius: 8px;
+    border: none;
+}
+
+/* Upload section */
+.form-control {
+    border-radius: 8px;
+}
+
+/* Animaciones */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.card {
+    animation: fadeIn 0.5s ease;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .possession-time {
+        padding: 10px;
+    }
+    
+    .team-possession h3 {
+        font-size: 1rem;
+    }
+    
+    .possession-bar {
+        height: 30px;
+    }
+    
+    .possession-stats {
+        font-size: 0.9rem;
+    }
+}
+
+/* Chart containers */
+canvas {
+    max-height: 300px;
+}
+
+/* Status messages */
+.spinner-border-sm {
+    width: 1rem;
+    height: 1rem;
+    border-width: 0.15em;
+    margin-right: 8px;
+}
