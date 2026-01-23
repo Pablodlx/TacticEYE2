@@ -273,17 +273,36 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             except Exception as e:
                 print(f"Error en on_frame_visualized: {e}")
         
-        def on_batch_complete(match_id, batch_idx, chunk_output):
+        def on_batch_complete(match_id, batch_idx, chunk_output, match_state):
             # Actualizar stats en tiempo real
             try:
-                # Extraer stats del chunk output
-                stats = chunk_output.chunk_stats if hasattr(chunk_output, 'chunk_stats') else {}
+                # Obtener resumen de estadísticas acumuladas
+                summary = match_state.get_summary()
                 
-                # Calcular estadísticas acumuladas
-                total_detections = stats.get('detections_count', 0)
-                possession_team = stats.get('possession_team', -1)
-                possession_player = stats.get('possession_player', -1)
-                events_count = stats.get('events_count', 0)
+                # Extraer datos para el frontend
+                possession_data = summary['possession']
+                passes_data = summary['passes']
+                
+                # Formatear para Chart.js
+                possession_percent = [
+                    possession_data['percent_by_team'].get(0, 0),
+                    possession_data['percent_by_team'].get(1, 0)
+                ]
+                
+                possession_seconds = [
+                    possession_data['seconds_by_team'].get(0, 0),
+                    possession_data['seconds_by_team'].get(1, 0)
+                ]
+                
+                passes = [
+                    passes_data['by_team'].get(0, 0),
+                    passes_data['by_team'].get(1, 0)
+                ]
+                
+                # Stats del chunk actual
+                chunk_stats = chunk_output.chunk_stats if hasattr(chunk_output, 'chunk_stats') else {}
+                total_detections = chunk_stats.get('detections_count', 0)
+                events_count = chunk_stats.get('events_count', 0)
                 
                 loop.run_until_complete(manager.send_update(session_id, {
                     "type": "batch_complete",
@@ -292,16 +311,20 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                     "end_frame": chunk_output.end_frame,
                     "processing_time_ms": chunk_output.processing_time_ms,
                     "stats": {
+                        "possession_percent": possession_percent,
+                        "possession_seconds": possession_seconds,
+                        "passes": passes,
                         "detections": total_detections,
-                        "possession_team": possession_team,
-                        "possession_player": possession_player,
                         "events": events_count,
-                        "fps_processing": round(stats.get('frames_processed', 0) / (chunk_output.processing_time_ms / 1000), 1) if chunk_output.processing_time_ms > 0 else 0
+                        "current_team": possession_data['current_team'],
+                        "current_player": possession_data['current_player']
                     },
-                    "message": f"✓ Batch {batch_idx + 1} completado: {total_detections} detecciones, {events_count} eventos"
+                    "message": f"✓ Batch {batch_idx + 1} completado: Team 0: {possession_percent[0]:.1f}%, Team 1: {possession_percent[1]:.1f}%"
                 }))
             except Exception as e:
                 print(f"Error en on_batch_complete: {e}")
+                import traceback
+                traceback.print_exc()
         
         def on_error(match_id, batch_idx, error):
             try:

@@ -130,7 +130,9 @@ def run_match_analysis(
             if metadata.is_live:
                 print(f"[{match_id}] Modo: LIVE STREAM (análisis continuo)")
             else:
-                print(f"[{match_id}] Modo: VOD ({metadata.total_frames} frames, {metadata.duration_seconds:.1f}s)")
+                duration_str = f"{metadata.duration_seconds:.1f}s" if metadata.duration_seconds else "duración desconocida"
+                frames_str = f"{metadata.total_frames} frames" if metadata.total_frames else "frames desconocidos"
+                print(f"[{match_id}] Modo: VOD ({frames_str}, {duration_str})")
             
             # Calcular batch size
             if config.batch_size_frames:
@@ -228,7 +230,7 @@ def run_match_analysis(
                     
                     # Callback de batch completo
                     if config.on_batch_complete:
-                        config.on_batch_complete(match_id, batch_idx, chunk_output)
+                        config.on_batch_complete(match_id, batch_idx, chunk_output, match_state)
                     
                     print()
                 

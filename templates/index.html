@@ -190,6 +190,94 @@
                             <div id="progressBarFill" class="progress-fill"></div>
                         </div>
                     </div>
+                    
+                    <!-- Live Charts Section (visible during analysis) -->
+                    <div id="live-charts-section" class="row mb-4">
+                        <div class="col-lg-6 mb-3">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="fas fa-chart-pie me-2"></i>Ball Possession</h5>
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="possessionChart" height="200"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6 mb-3">
+                            <div class="card">
+                                <div class="card-header">
+                                    <h5 class="mb-0"><i class="fas fa-chart-bar me-2"></i>Completed Passes</h5>
+                                </div>
+                                <div class="card-body">
+                                    <canvas id="passesChart" height="200"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Live Team Statistics -->
+                    <div id="live-team-stats" class="row mb-4">
+                        <div class="col-lg-6 mb-3">
+                            <div class="card">
+                                <div class="card-header bg-success text-white">
+                                    <h5 class="mb-0"><i class="fas fa-users me-2"></i>Team 0 - Statistics</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="text-uppercase text-muted small">Possession Time</span>
+                                            <strong id="live-possession-time-0" class="text-success h5 mb-0">0.0s</strong>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="text-uppercase text-muted small">Possession %</span>
+                                            <strong id="live-possession-percent-0" class="text-success h5 mb-0">0.0%</strong>
+                                        </div>
+                                        <div class="progress" style="height: 8px;">
+                                            <div id="live-possession-bar-0" class="progress-bar bg-success" style="width: 0%"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span class="text-uppercase text-muted small">Passes Completed</span>
+                                            <strong id="live-passes-0" class="text-success h5 mb-0">0</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-6 mb-3">
+                            <div class="card">
+                                <div class="card-header bg-danger text-white">
+                                    <h5 class="mb-0"><i class="fas fa-users me-2"></i>Team 1 - Statistics</h5>
+                                </div>
+                                <div class="card-body">
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="text-uppercase text-muted small">Possession Time</span>
+                                            <strong id="live-possession-time-1" class="text-danger h5 mb-0">0.0s</strong>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between align-items-center mb-2">
+                                            <span class="text-uppercase text-muted small">Possession %</span>
+                                            <strong id="live-possession-percent-1" class="text-danger h5 mb-0">0.0%</strong>
+                                        </div>
+                                        <div class="progress" style="height: 8px;">
+                                            <div id="live-possession-bar-1" class="progress-bar bg-danger" style="width: 0%"></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div class="d-flex justify-content-between align-items-center">
+                                            <span class="text-uppercase text-muted small">Passes Completed</span>
+                                            <strong id="live-passes-1" class="text-danger h5 mb-0">0</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

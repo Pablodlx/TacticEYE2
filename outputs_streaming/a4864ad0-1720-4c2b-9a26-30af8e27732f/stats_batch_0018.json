@@ -1,0 +1,13 @@
+{
+  "batch_idx": 18,
+  "start_frame": 1350,
+  "end_frame": 1424,
+  "chunk_stats": {
+    "frames_processed": 75,
+    "detections_count": 210,
+    "events_count": 0,
+    "possession_team": 0,
+    "possession_player": 10
+  },
+  "processing_time_ms": 1343.8217639923096
+}

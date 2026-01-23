@@ -169,6 +169,8 @@ class FFmpegStreamSource(VideoSource):
                 fps=30.0,  # Asumimos 30 fps
                 width=1920,
                 height=1080,
+                total_frames=None,  # No conocido para streams
+                duration_seconds=None,  # No conocido para streams
                 is_live=self.is_live
             )
     
@@ -185,6 +187,10 @@ class FFmpegStreamSource(VideoSource):
         
         cmd = [
             'ffmpeg',
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_delay_max', '5',
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             '-i', self.url,
             '-f', 'rawvideo',
             '-pix_fmt', 'bgr24',  # OpenCV usa BGR
@@ -193,16 +199,16 @@ class FFmpegStreamSource(VideoSource):
         ]
         
         if self.is_live:
-            # Para live: buffer pequeño, baja latencia
-            cmd.insert(1, '-fflags')
-            cmd.insert(2, 'nobuffer')
-            cmd.insert(3, '-flags')
-            cmd.insert(4, 'low_delay')
+            # Para live: buffer pequeño, baja latencia (ya incluidas las opciones de reconnect arriba)
+            pass
+        
+        print(f"Iniciando FFmpeg para lectura de frames...")
+        print(f"Comando FFmpeg con opciones de reconnect y user-agent")
         
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # Capturar stderr para debugging
             bufsize=10**8
         )
         
@@ -210,10 +216,23 @@ class FFmpegStreamSource(VideoSource):
         height = self._metadata.height
         frame_size = width * height * 3  # BGR = 3 bytes por pixel
         
+        print(f"Esperando frames de FFmpeg (frame_size={frame_size} bytes, {width}x{height})...")
+        
+        frame_count = 0
         while True:
             raw_frame = self.process.stdout.read(frame_size)
             if len(raw_frame) != frame_size:
+                # Verificar si FFmpeg tuvo algún error
+                if frame_count == 0:
+                    stderr_output = self.process.stderr.read().decode('utf-8', errors='ignore')
+                    print(f"FFmpeg no produjo frames. Error stderr:\n{stderr_output[-500:]}")
                 break
+            
+            frame_count += 1
+            if frame_count == 1:
+                print(f"Primer frame recibido correctamente")
+            elif frame_count % 1000 == 0:
+                print(f"Procesados {frame_count} frames...")
             
             # Convertir bytes a numpy array
             frame = np.frombuffer(raw_frame, dtype=np.uint8)
@@ -227,46 +246,175 @@ class FFmpegStreamSource(VideoSource):
             self.process.wait()
 
 
-class YouTubeSource(FFmpegStreamSource):
+class YouTubeSource(VideoSource):
     """
-    Fuente específica para YouTube (VOD y Live).
+    Fuente específica para YouTube (VOD y Live) con streaming directo.
     
-    Usa yt-dlp para resolver la URL real del stream.
+    Usa yt-dlp para obtener la mejor URL de streaming y OpenCV para leer frames.
     """
     
     def __init__(self, youtube_url: str, is_live: bool = False):
-        # Resolver URL real con yt-dlp
-        real_url = self._resolve_youtube_url(youtube_url)
-        super().__init__(real_url, is_live=is_live)
         self.youtube_url = youtube_url
-    
-    @staticmethod
-    def _resolve_youtube_url(youtube_url: str) -> str:
-        """
-        Usa yt-dlp para obtener la URL directa del stream.
+        self.is_live = is_live
+        self.cap = None
+        self._metadata = None
         
-        Alternativa: pytube, youtube-dl
-        """
+        # Obtener metadata y URL de streaming
+        self.stream_url = self._get_stream_url()
+        self._probe_metadata()
+    
+    def _get_stream_url(self) -> str:
+        """Obtiene la mejor URL de streaming usando yt-dlp"""
         try:
-            cmd = [
+            print(f"Resolviendo URL de YouTube para streaming: {self.youtube_url}")
+            
+            # Obtener metadata primero
+            cmd_json = [
                 'yt-dlp',
-                '-f', 'best[ext=mp4]',  # Mejor calidad MP4
-                '-g',  # Get URL
-                youtube_url
+                '--no-playlist',
+                '--dump-json',
+                '--no-warnings',
+                self.youtube_url
             ]
             
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            real_url = result.stdout.strip()
+            result_json = subprocess.run(cmd_json, capture_output=True, text=True, timeout=30)
             
-            if not real_url:
-                raise ValueError(f"No se pudo resolver URL de YouTube: {youtube_url}")
+            # Obtener URL de streaming - usar formato que OpenCV/FFmpeg puedan leer directamente
+            # Preferir formatos progresivos (no DASH/HLS) para mejor compatibilidad
+            cmd = [
+                'yt-dlp',
+                '--no-playlist',
+                '--no-warnings',
+                '-f', 'best[protocol^=http][ext=mp4]/best[protocol^=http]/best',  # HTTP progresivo preferido
+                '-g',  # Get URL
+                self.youtube_url
+            ]
             
-            return real_url
-        
-        except subprocess.TimeoutExpired:
-            raise ValueError("Timeout al resolver URL de YouTube")
+            print("Obteniendo URL de streaming con yt-dlp...")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode != 0:
+                error_msg = result.stderr.strip() if result.stderr else "Error desconocido"
+                raise ValueError(f"yt-dlp error: {error_msg}")
+            
+            stream_url = result.stdout.strip()
+            
+            if not stream_url:
+                raise ValueError("No se pudo obtener URL de streaming")
+            
+            print(f"URL de streaming obtenida: {stream_url[:100]}...")
+            return stream_url
+            
         except Exception as e:
-            raise ValueError(f"Error al resolver YouTube URL: {e}")
+            print(f"Error obteniendo URL de streaming: {e}")
+            raise ValueError(f"Error al obtener URL de YouTube: {e}")
+    
+    def _probe_metadata(self):
+        """Obtiene metadata del video"""
+        try:
+            # Abrir video con OpenCV
+            self.cap = cv2.VideoCapture(self.stream_url)
+            
+            if not self.cap.isOpened():
+                raise ValueError("No se pudo abrir el stream con OpenCV")
+            
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            
+            # Para streams, total_frames puede ser 0
+            if total_frames == 0:
+                total_frames = None
+                duration = None
+            else:
+                duration = total_frames / fps if fps > 0 else None
+            
+            print(f"Metadata del stream: {width}x{height} @ {fps}fps")
+            
+            self._metadata = VideoMetadata(
+                fps=fps if fps > 0 else 30.0,
+                width=width,
+                height=height,
+                total_frames=total_frames,
+                duration_seconds=duration,
+                is_live=self.is_live
+            )
+            
+        except Exception as e:
+            print(f"Error obteniendo metadata con OpenCV: {e}")
+            # Intentar obtener de yt-dlp
+            try:
+                cmd = [
+                    'yt-dlp',
+                    '--no-playlist',
+                    '--dump-json',
+                    '--no-warnings',
+                    self.youtube_url
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0 and result.stdout:
+                    metadata = json.loads(result.stdout)
+                    
+                    fps = float(metadata.get('fps', 30.0))
+                    width = int(metadata.get('width', 1920))
+                    height = int(metadata.get('height', 1080))
+                    duration = float(metadata.get('duration', 0)) if not self.is_live else None
+                    total_frames = int(duration * fps) if duration else None
+                    
+                    self._metadata = VideoMetadata(
+                        fps=fps,
+                        width=width,
+                        height=height,
+                        total_frames=total_frames,
+                        duration_seconds=duration,
+                        is_live=self.is_live
+                    )
+                    
+                    # Reabrir con OpenCV
+                    self.cap = cv2.VideoCapture(self.stream_url)
+                else:
+                    raise ValueError("No se pudo obtener metadata")
+                    
+            except Exception as e2:
+                print(f"Error obteniendo metadata con yt-dlp: {e2}")
+                raise ValueError(f"No se pudo obtener metadata del video: {e}, {e2}")
+    
+    def get_metadata(self) -> VideoMetadata:
+        return self._metadata
+    
+    def get_frame_generator(self) -> Iterator[np.ndarray]:
+        """Genera frames usando OpenCV"""
+        if not self.cap or not self.cap.isOpened():
+            self.cap = cv2.VideoCapture(self.stream_url)
+            
+        if not self.cap.isOpened():
+            raise ValueError("No se pudo abrir el video stream")
+        
+        print(f"Iniciando lectura de frames con OpenCV...")
+        
+        frame_count = 0
+        while True:
+            ret, frame = self.cap.read()
+            if not ret:
+                print(f"Stream finalizado. Total frames: {frame_count}")
+                break
+            
+            frame_count += 1
+            if frame_count == 1:
+                print("Primer frame recibido correctamente!")
+            elif frame_count % 1000 == 0:
+                print(f"Procesados {frame_count} frames...")
+            
+            yield frame
+    
+    def close(self):
+        if self.cap:
+            self.cap.release()
+
+
 
 
 class HLSSource(FFmpegStreamSource):

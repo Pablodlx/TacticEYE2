@@ -325,7 +325,82 @@ function updateBatchComplete(data) {
     // Actualizar estadísticas en tiempo real
     if (data.stats) {
         updateLiveStats(data.stats);
+        updateLiveCharts(data.stats);
     }
+}
+
+// Actualizar gráficos en tiempo real
+function updateLiveCharts(stats) {
+    // Inicializar gráficos si no existen
+    if (!possessionChart || !passesChart) {
+        initializeCharts();
+    }
+    
+    // Actualizar gráfico de posesión
+    if (stats.possession_percent && possessionChart) {
+        possessionChart.data.datasets[0].data = [
+            stats.possession_percent[0] || 0,
+            stats.possession_percent[1] || 0
+        ];
+        possessionChart.update('none');
+    }
+    
+    // Actualizar gráfico de pases
+    if (stats.passes && passesChart) {
+        passesChart.data.datasets[0].data = [
+            stats.passes[0] || 0,
+            stats.passes[1] || 0
+        ];
+        passesChart.update('none');
+    }
+    
+    // Actualizar estadísticas detalladas por equipo (sección LIVE)
+    if (stats.possession_percent) {
+        const elem0 = document.getElementById('live-possession-percent-0');
+        const elem1 = document.getElementById('live-possession-percent-1');
+        if (elem0) elem0.textContent = (stats.possession_percent[0] || 0).toFixed(1) + '%';
+        if (elem1) elem1.textContent = (stats.possession_percent[1] || 0).toFixed(1) + '%';
+        
+        const bar0 = document.getElementById('live-possession-bar-0');
+        const bar1 = document.getElementById('live-possession-bar-1');
+        if (bar0) bar0.style.width = (stats.possession_percent[0] || 0) + '%';
+        if (bar1) bar1.style.width = (stats.possession_percent[1] || 0) + '%';
+    }
+    
+    if (stats.possession_seconds) {
+        const time0 = document.getElementById('live-possession-time-0');
+        const time1 = document.getElementById('live-possession-time-1');
+        if (time0) time0.textContent = (stats.possession_seconds[0] || 0).toFixed(1) + 's';
+        if (time1) time1.textContent = (stats.possession_seconds[1] || 0).toFixed(1) + 's';
+    }
+    
+    if (stats.passes) {
+        const passes0 = document.getElementById('live-passes-0');
+        const passes1 = document.getElementById('live-passes-1');
+        if (passes0) passes0.textContent = stats.passes[0] || 0;
+        if (passes1) passes1.textContent = stats.passes[1] || 0;
+    }
+    
+    // También actualizar las estadísticas finales (para cuando se complete)
+    const finalPercent0 = document.getElementById('possession-percent-0');
+    const finalPercent1 = document.getElementById('possession-percent-1');
+    if (finalPercent0 && stats.possession_percent) finalPercent0.textContent = (stats.possession_percent[0] || 0).toFixed(1) + '%';
+    if (finalPercent1 && stats.possession_percent) finalPercent1.textContent = (stats.possession_percent[1] || 0).toFixed(1) + '%';
+    
+    const finalBar0 = document.getElementById('possession-bar-0');
+    const finalBar1 = document.getElementById('possession-bar-1');
+    if (finalBar0 && stats.possession_percent) finalBar0.style.width = (stats.possession_percent[0] || 0) + '%';
+    if (finalBar1 && stats.possession_percent) finalBar1.style.width = (stats.possession_percent[1] || 0) + '%';
+    
+    const finalTime0 = document.getElementById('possession-time-0');
+    const finalTime1 = document.getElementById('possession-time-1');
+    if (finalTime0 && stats.possession_seconds) finalTime0.textContent = (stats.possession_seconds[0] || 0).toFixed(1) + 's';
+    if (finalTime1 && stats.possession_seconds) finalTime1.textContent = (stats.possession_seconds[1] || 0).toFixed(1) + 's';
+    
+    const finalPasses0 = document.getElementById('passes-0');
+    const finalPasses1 = document.getElementById('passes-1');
+    if (finalPasses0 && stats.passes) finalPasses0.textContent = stats.passes[0] || 0;
+    if (finalPasses1 && stats.passes) finalPasses1.textContent = stats.passes[1] || 0;
 }
 
 // Actualizar estadísticas en vivo
