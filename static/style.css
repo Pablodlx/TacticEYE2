@@ -493,3 +493,111 @@ canvas {
 .analysis-panel {
     animation: fadeIn 0.5s ease;
 }
+
+/* ====================
+   Source Option Cards
+   ==================== */
+
+.source-option-card {
+    background: rgba(30, 58, 95, 0.3);
+    border: 2px solid var(--border-color);
+    border-radius: 16px;
+    padding: 30px;
+    height: 100%;
+    transition: all 0.3s ease;
+}
+
+.source-option-card:hover {
+    border-color: var(--accent-green);
+    background: rgba(30, 58, 95, 0.5);
+    transform: translateY(-4px);
+    box-shadow: 0 8px 24px rgba(0, 212, 170, 0.2);
+}
+
+.source-option-header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.source-option-header h4 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 12px 0 8px 0;
+}
+
+.source-option-header p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.upload-zone-compact {
+    border: 2px dashed var(--border-color);
+    border-radius: 12px;
+    padding: 30px 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    background: rgba(59, 130, 246, 0.05);
+}
+
+.upload-zone-compact:hover {
+    border-color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+}
+
+/* Drag and drop active state */
+.upload-zone-compact.dragover {
+    border-color: var(--accent-green);
+    background: rgba(0, 212, 170, 0.15);
+    transform: scale(1.02);
+}
+
+/* ====================
+   Live Statistics Boxes
+   ==================== */
+
+.stat-box {
+    background: linear-gradient(135deg, rgba(26, 31, 46, 0.95) 0%, rgba(15, 20, 25, 0.95) 100%);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    text-align: center;
+    transition: all 0.3s ease;
+}
+
+.stat-box:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 8px 16px rgba(0, 212, 170, 0.2);
+    border-color: var(--accent-green);
+}
+
+.stat-box .stat-label {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-box .stat-value {
+    color: var(--text-primary);
+    font-size: 1.75rem;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+}
+
+#live-stats {
+    animation: slideInUp 0.5s ease-out;
+}
+
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

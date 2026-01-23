@@ -24,6 +24,10 @@ try:
     from modules.reid_tracker import ReIDTracker
     from modules.possession_tracker_v2 import PossessionTrackerV2
     from modules.team_classifier_v2 import TeamClassifierV2
+    # Sistema de micro-batching
+    from modules.video_sources import open_source, SourceType
+    from modules.match_analyzer import run_match_analysis, AnalysisConfig
+    from modules.match_state import FileSystemStorage
 except Exception as e:
     print(f"Error importando módulos: {e}")
 
@@ -121,15 +125,69 @@ async def upload_video(file: UploadFile = File(...)):
         }, status_code=500)
 
 
+@app.post("/api/analyze/url")
+async def analyze_from_url(request: Request):
+    """Analizar video desde URL (YouTube, HLS, RTMP, etc.)"""
+    try:
+        data = await request.json()
+        source_url = data.get('url')
+        source_type_str = data.get('source_type', 'youtube')
+        
+        if not source_url:
+            return JSONResponse({"success": False, "error": "URL requerida"}, status_code=400)
+        
+        # Generar ID único
+        session_id = str(uuid.uuid4())
+        
+        # Mapear source_type
+        source_type_map = {
+            'youtube': SourceType.YOUTUBE_VOD,
+            'hls': SourceType.HLS,
+            'rtmp': SourceType.RTMP,
+            'veo': SourceType.VEO
+        }
+        source_type = source_type_map.get(source_type_str, SourceType.YOUTUBE_VOD)
+        
+        # Inicializar estado
+        analysis_state[session_id] = {
+            "status": "initialized",
+            "source_type": source_type_str,
+            "source_url": source_url,
+            "progress": 0,
+            "stats": None
+        }
+        
+        # Ejecutar análisis en background con nuevo sistema
+        import threading
+        thread = threading.Thread(target=process_video_streaming, args=(session_id, source_type, source_url))
+        thread.daemon = True
+        thread.start()
+        
+        return JSONResponse({
+            "success": True,
+            "session_id": session_id,
+            "message": "Análisis iniciado"
+        })
+        
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 @app.post("/api/analyze/{session_id}")
 async def start_analysis(session_id: str, background_tasks: BackgroundTasks):
-    """Iniciar análisis de video"""
+    """Iniciar análisis de video subido"""
     if session_id not in analysis_state:
         return JSONResponse({"success": False, "error": "Sesión no encontrada"}, status_code=404)
     
-    # Ejecutar análisis en background (sin async)
+    state = analysis_state[session_id]
+    file_path = state.get("file_path")
+    
+    if not file_path:
+        return JSONResponse({"success": False, "error": "Archivo no encontrado"}, status_code=404)
+    
+    # Ejecutar análisis en background con nuevo sistema
     import threading
-    thread = threading.Thread(target=process_video_sync, args=(session_id,))
+    thread = threading.Thread(target=process_video_streaming, args=(session_id, SourceType.UPLOADED_FILE, file_path))
     thread.daemon = True
     thread.start()
     
@@ -168,8 +226,186 @@ async def process_video(session_id: str):
     await loop.run_in_executor(None, process_video_sync, session_id)
 
 
+def process_video_streaming(session_id: str, source_type: SourceType, source: str):
+    """Procesar video con sistema de micro-batching"""
+    
+    try:
+        state = analysis_state[session_id]
+        state["status"] = "processing"
+        
+        # Crear nuevo event loop para este thread
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Callbacks para progreso
+        def on_progress(match_id, batch_idx, frames_processed, total_frames):
+            try:
+                progress_percent = int((frames_processed / total_frames * 100)) if total_frames > 0 else 0
+                loop.run_until_complete(manager.send_update(session_id, {
+                    "type": "progress",
+                    "batch_idx": batch_idx,
+                    "frame": frames_processed,
+                    "total_frames": total_frames,
+                    "progress": progress_percent,
+                    "message": f"Procesando batch {batch_idx + 1}... ({frames_processed}/{total_frames} frames)"
+                }))
+                state["progress"] = progress_percent
+            except Exception as e:
+                print(f"Error en on_progress: {e}")
+        
+        def on_frame_visualized(match_id, frame, frame_idx):
+            """Callback para enviar frames anotados por WebSocket"""
+            try:
+                import cv2
+                import base64
+                
+                # Codificar frame a JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                frame_base64 = base64.b64encode(buffer).decode('utf-8')
+                
+                # Enviar por WebSocket
+                loop.run_until_complete(manager.send_update(session_id, {
+                    "type": "frame",
+                    "frame_idx": frame_idx,
+                    "image": frame_base64
+                }))
+            except Exception as e:
+                print(f"Error en on_frame_visualized: {e}")
+        
+        def on_batch_complete(match_id, batch_idx, chunk_output):
+            # Actualizar stats en tiempo real
+            try:
+                # Extraer stats del chunk output
+                stats = chunk_output.chunk_stats if hasattr(chunk_output, 'chunk_stats') else {}
+                
+                # Calcular estadísticas acumuladas
+                total_detections = stats.get('detections_count', 0)
+                possession_team = stats.get('possession_team', -1)
+                possession_player = stats.get('possession_player', -1)
+                events_count = stats.get('events_count', 0)
+                
+                loop.run_until_complete(manager.send_update(session_id, {
+                    "type": "batch_complete",
+                    "batch_idx": batch_idx,
+                    "start_frame": chunk_output.start_frame,
+                    "end_frame": chunk_output.end_frame,
+                    "processing_time_ms": chunk_output.processing_time_ms,
+                    "stats": {
+                        "detections": total_detections,
+                        "possession_team": possession_team,
+                        "possession_player": possession_player,
+                        "events": events_count,
+                        "fps_processing": round(stats.get('frames_processed', 0) / (chunk_output.processing_time_ms / 1000), 1) if chunk_output.processing_time_ms > 0 else 0
+                    },
+                    "message": f"✓ Batch {batch_idx + 1} completado: {total_detections} detecciones, {events_count} eventos"
+                }))
+            except Exception as e:
+                print(f"Error en on_batch_complete: {e}")
+        
+        def on_error(match_id, batch_idx, error):
+            try:
+                loop.run_until_complete(manager.send_update(session_id, {
+                    "type": "error",
+                    "message": str(error),
+                    "batch_idx": batch_idx
+                }))
+            except Exception as e:
+                print(f"Error en on_error: {e}")
+        
+        # Configuración del análisis
+        config = AnalysisConfig(
+            source_type=source_type,
+            source=source,
+            batch_size_seconds=3.0,
+            device="cuda" if Path("weights/best.pt").exists() else "cpu",
+            model_path="weights/best.pt",
+            conf_threshold=0.30,
+            on_progress=on_progress,
+            on_batch_complete=on_batch_complete,
+            on_error=on_error,
+            on_frame_visualized=on_frame_visualized
+        )
+        
+        # Ejecutar análisis con micro-batching
+        try:
+            loop.run_until_complete(manager.send_update(session_id, {
+                "type": "status",
+                "message": "Iniciando análisis con micro-batching..."
+            }))
+        except Exception as e:
+            print(f"Error enviando mensaje inicial: {e}")
+        
+        final_state = run_match_analysis(
+            match_id=session_id,
+            config=config,
+            resume=False
+        )
+        
+        # Obtener estadísticas finales
+        possession_stats = final_state.possession_state
+        total_frames = final_state.total_frames_processed
+        fps = final_state.fps or 30.0
+        total_seconds = total_frames / fps
+        
+        # Calcular porcentajes
+        frames_by_team = possession_stats.frames_by_team
+        total_possession_frames = sum(frames_by_team.values())
+        
+        possession_percent = {}
+        possession_seconds = {}
+        for team_id, frames in frames_by_team.items():
+            if team_id >= 0:  # Excluir -1 (sin posesión)
+                pct = (frames / total_possession_frames * 100) if total_possession_frames > 0 else 0
+                possession_percent[team_id] = pct
+                possession_seconds[team_id] = frames / fps
+        
+        final_stats = {
+            "total_frames": total_frames,
+            "total_seconds": total_seconds,
+            "possession_percent": possession_percent,
+            "possession_seconds": possession_seconds,
+            "passes": possession_stats.passes_by_team,
+            "possession_changes": possession_stats.possession_changes
+        }
+        
+        state["status"] = "completed"
+        state["progress"] = 100
+        state["stats"] = final_stats
+        
+        try:
+            loop.run_until_complete(manager.send_update(session_id, {
+                "type": "completed",
+                "stats": final_stats
+            }))
+        except Exception as e:
+            print(f"Error enviando completed: {e}")
+        
+        # Cerrar el loop
+        loop.close()
+        
+    except Exception as e:
+        print(f"Error en análisis con micro-batching: {e}")
+        traceback.print_exc()
+        
+        state["status"] = "error"
+        state["error"] = str(e)
+        
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(manager.send_update(session_id, {
+                "type": "error",
+                "message": str(e)
+            }))
+            loop.close()
+        except Exception as e2:
+            print(f"Error enviando error message: {e2}")
+
+
 def process_video_sync(session_id: str):
-    """Procesar video con tracking, clasificación y posesión (versión sync)"""
+    """Procesar video con tracking, clasificación y posesión (versión sync - LEGACY)"""
     import asyncio
     
     try:

@@ -1,0 +1,50 @@
+{
+  "match_id": "d737faa9-8742-441c-96fc-12e1e25e14cc",
+  "source_type": "uploaded_file",
+  "source_url": "/home/pablodlx/TacticEYE2_github/uploads/d737faa9-8742-441c-96fc-12e1e25e14cc_sample_match_30s.mp4",
+  "fps": 30.0,
+  "status": "failed",
+  "total_frames_processed": 0,
+  "last_batch_idx": -1,
+  "last_update": "2026-01-23T12:01:30.431235",
+  "tracker_state": {
+    "active_tracks": {},
+    "next_id": 0,
+    "lost_tracks": {},
+    "last_frame_idx": -1
+  },
+  "team_classifier_state": {
+    "player_team_map": {},
+    "vote_history": {},
+    "team_colors": {},
+    "trained_frames": 0,
+    "is_trained": false
+  },
+  "possession_state": {
+    "current_team": -1,
+    "current_player": -1,
+    "frames_by_team": {
+      "0": 0,
+      "1": 0,
+      "-1": 0
+    },
+    "passes_by_team": {
+      "0": 0,
+      "1": 0
+    },
+    "possession_changes": [],
+    "last_frame_idx": -1
+  },
+  "cached_summary": {},
+  "metadata": {
+    "video_metadata": {
+      "fps": 30.0,
+      "width": 1280,
+      "height": 720,
+      "total_frames": 900,
+      "duration_seconds": 30.0,
+      "is_live": false
+    },
+    "error": "PossessionTrackerV2.__init__() got an unexpected keyword argument 'possession_distance'"
+  }
+}

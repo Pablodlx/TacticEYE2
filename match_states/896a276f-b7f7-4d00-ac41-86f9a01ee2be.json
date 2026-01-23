@@ -1,0 +1,42 @@
+{
+  "match_id": "896a276f-b7f7-4d00-ac41-86f9a01ee2be",
+  "source_type": "youtube_vod",
+  "source_url": "https://www.youtube.com/watch?v=Pq_g9R_aqOM&list=PLKj1QUtwqLN-e8g2-WImgL0N4dKsekghk",
+  "fps": 30.0,
+  "status": "failed",
+  "total_frames_processed": 0,
+  "last_batch_idx": -1,
+  "last_update": "2026-01-23T13:35:27.610324",
+  "tracker_state": {
+    "active_tracks": {},
+    "next_id": 0,
+    "lost_tracks": {},
+    "last_frame_idx": -1
+  },
+  "team_classifier_state": {
+    "player_team_map": {},
+    "vote_history": {},
+    "team_colors": {},
+    "trained_frames": 0,
+    "is_trained": false
+  },
+  "possession_state": {
+    "current_team": -1,
+    "current_player": -1,
+    "frames_by_team": {
+      "0": 0,
+      "1": 0,
+      "-1": 0
+    },
+    "passes_by_team": {
+      "0": 0,
+      "1": 0
+    },
+    "possession_changes": [],
+    "last_frame_idx": -1
+  },
+  "cached_summary": {},
+  "metadata": {
+    "error": "Timeout al resolver URL de YouTube"
+  }
+}

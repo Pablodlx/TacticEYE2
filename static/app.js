@@ -7,44 +7,143 @@ let timelineChart = null;
 
 // File selection handler
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM loaded, initializing file handlers...');
+    
     const fileInput = document.getElementById('videoFile');
     const fileInfo = document.getElementById('file-info');
     const fileName = document.getElementById('file-name');
-    const uploadZone = document.getElementById('uploadZone');
+    const fileUploadZone = document.getElementById('fileUploadZone');
+    
+    console.log('Elements found:', {
+        fileInput: !!fileInput,
+        fileInfo: !!fileInfo,
+        fileName: !!fileName,
+        fileUploadZone: !!fileUploadZone
+    });
+    
+    if (!fileInput || !fileUploadZone) {
+        console.error('Missing required elements!');
+        return;
+    }
     
     fileInput.addEventListener('change', function(e) {
+        console.log('File selected:', this.files);
         if (this.files && this.files[0]) {
             fileName.textContent = this.files[0].name;
             fileInfo.style.display = 'block';
+            console.log('File info displayed');
         }
     });
     
     // Drag and drop
-    uploadZone.addEventListener('dragover', (e) => {
+    fileUploadZone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        uploadZone.style.borderColor = 'var(--accent-green)';
+        fileUploadZone.classList.add('dragover');
     });
     
-    uploadZone.addEventListener('dragleave', () => {
-        uploadZone.style.borderColor = 'var(--border-color)';
+    fileUploadZone.addEventListener('dragleave', () => {
+        fileUploadZone.classList.remove('dragover');
     });
     
-    uploadZone.addEventListener('drop', (e) => {
+    fileUploadZone.addEventListener('drop', (e) => {
         e.preventDefault();
-        uploadZone.style.borderColor = 'var(--border-color)';
+        fileUploadZone.classList.remove('dragover');
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             fileInput.files = files;
             fileName.textContent = files[0].name;
             fileInfo.style.display = 'block';
+            console.log('File dropped:', files[0].name);
         }
     });
+    
+    console.log('File handlers initialized successfully');
 });
+
+// Actualizar placeholder según tipo de URL
+function updateUrlPlaceholder() {
+    const urlInput = document.getElementById('videoUrl');
+    const helpText = document.getElementById('urlHelpText');
+    const sourceType = document.getElementById('urlSourceType').value;
+    
+    const placeholders = {
+        'youtube': 'https://www.youtube.com/watch?v=... or https://youtu.be/...',
+        'hls': 'https://example.com/stream.m3u8',
+        'rtmp': 'rtmp://example.com/live/stream',
+        'veo': 'https://veo.co/matches/...'
+    };
+    
+    const helpTexts = {
+        'youtube': 'Paste YouTube video URL or live stream link',
+        'hls': 'Enter HLS stream URL (.m3u8)',
+        'rtmp': 'Enter RTMP stream URL',
+        'veo': 'Enter Veo match URL'
+    };
+    
+    urlInput.placeholder = placeholders[sourceType] || placeholders['youtube'];
+    helpText.innerHTML = '<i class="fas fa-info-circle"></i> ' + (helpTexts[sourceType] || helpTexts['youtube']);
+}
+
+// Analizar desde URL
+async function analyzeFromUrl() {
+    console.log('analyzeFromUrl called');
+    
+    const urlInput = document.getElementById('videoUrl');
+    const sourceType = document.getElementById('urlSourceType').value;
+    const url = urlInput.value.trim();
+    
+    console.log('URL:', url, 'Type:', sourceType);
+    
+    if (!url) {
+        alert('Please enter a video URL');
+        return;
+    }
+    
+    const statusDiv = document.getElementById('upload-status');
+    statusDiv.innerHTML = '<div class="alert alert-info"><i class="fas fa-spinner fa-spin me-2"></i>Connecting to stream...</div>';
+    
+    try {
+        console.log('Sending request to /api/analyze/url');
+        const response = await fetch('/api/analyze/url', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                url: url,
+                source_type: sourceType
+            })
+        });
+        
+        const data = await response.json();
+        console.log('Response:', data);
+        
+        if (data.success) {
+            currentSessionId = data.session_id;
+            statusDiv.innerHTML = '<div class="alert alert-success"><i class="fas fa-check-circle me-2"></i>Stream connected successfully!</div>';
+            
+            // Conectar WebSocket
+            connectWebSocket();
+            
+            // Mostrar sección de progreso
+            document.getElementById('upload-section').style.display = 'none';
+            document.getElementById('progress-section').style.display = 'block';
+        } else {
+            statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${data.error}</div>`;
+        }
+    } catch (error) {
+        statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${error.message}</div>`;
+    }
+}
 
 // Subir video
 async function uploadVideo() {
+    console.log('uploadVideo called');
+    
     const fileInput = document.getElementById('videoFile');
     const file = fileInput.files[0];
+    
+    console.log('File:', file);
     
     if (!file) {
         alert('Por favor selecciona un video');
@@ -61,12 +160,14 @@ async function uploadVideo() {
         const formData = new FormData();
         formData.append('file', file);
         
+        console.log('Uploading file to /api/upload');
         const response = await fetch('/api/upload', {
             method: 'POST',
             body: formData
         });
         
         const data = await response.json();
+        console.log('Upload response:', data);
         
         if (data.success) {
             currentSessionId = data.session_id;
@@ -82,6 +183,7 @@ async function uploadVideo() {
             uploadBtn.disabled = false;
         }
     } catch (error) {
+        console.error('Error in uploadVideo:', error);
         statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${error.message}</div>`;
         uploadBtn.disabled = false;
     }
@@ -110,14 +212,57 @@ function connectWebSocket() {
 
 // Manejar mensajes WebSocket
 function handleWebSocketMessage(data) {
+    console.log('WebSocket message:', data);
+    
     if (data.type === 'status') {
         document.getElementById('progress-text').textContent = data.message;
     } else if (data.type === 'progress') {
         updateProgress(data);
+    } else if (data.type === 'frame') {
+        updateVideoFrame(data);
+    } else if (data.type === 'batch_complete') {
+        updateBatchComplete(data);
     } else if (data.type === 'completed') {
         showResults(data.stats);
     } else if (data.type === 'error') {
         showError(data.message);
+    }
+}
+
+// Actualizar frame del video
+function updateVideoFrame(data) {
+    const canvas = document.getElementById('videoCanvas');
+    if (!canvas) {
+        console.warn('Canvas element not found');
+        return;
+    }
+    
+    const ctx = canvas.getContext('2d');
+    
+    const img = new Image();
+    img.onload = function() {
+        // Ajustar tamaño del canvas si es necesario
+        if (canvas.width !== img.width || canvas.height !== img.height) {
+            canvas.width = img.width;
+            canvas.height = img.height;
+        }
+        
+        // Dibujar imagen
+        ctx.drawImage(img, 0, 0);
+    };
+    
+    img.onerror = function() {
+        console.error('Error loading frame image');
+    };
+    
+    img.src = 'data:image/jpeg;base64,' + data.image;
+    
+    // Actualizar número de frame si está disponible
+    if (data.frame_idx !== undefined) {
+        const currentFrameEl = document.getElementById('current-frame');
+        if (currentFrameEl) {
+            currentFrameEl.textContent = data.frame_idx;
+        }
     }
 }
 
@@ -148,7 +293,7 @@ function updateProgress(data) {
     const progressText = document.getElementById('progress-text');
     const currentFrame = document.getElementById('current-frame');
     const totalFrames = document.getElementById('total-frames');
-    const elapsedTime = document.getElementById('elapsed-time');
+    const currentBatch = document.getElementById('current-batch');
     
     progressBarFill.style.width = data.progress + '%';
     progressPercent.textContent = data.progress + '%';
@@ -161,14 +306,23 @@ function updateProgress(data) {
         totalFrames.textContent = data.total_frames;
     }
     
-    if (data.elapsed_time !== undefined) {
-        elapsedTime.textContent = Math.round(data.elapsed_time) + 's';
+    if (data.batch_idx !== undefined && currentBatch) {
+        currentBatch.textContent = data.batch_idx + 1;
     }
     
-    progressText.textContent = data.message || 'Processing video...';
-    progressText.textContent = `Frame ${data.frame} / ${data.total_frames}`;
+    progressText.textContent = data.message || `Frame ${data.frame} / ${data.total_frames}`;
+}
+
+// Actualizar cuando se completa un batch
+function updateBatchComplete(data) {
+    const progressText = document.getElementById('progress-text');
     
-    // Actualizar estadísticas en tiempo real si existen
+    // Mostrar mensaje de batch completo
+    if (data.message) {
+        progressText.textContent = data.message;
+    }
+    
+    // Actualizar estadísticas en tiempo real
     if (data.stats) {
         updateLiveStats(data.stats);
     }
@@ -176,48 +330,73 @@ function updateProgress(data) {
 
 // Actualizar estadísticas en vivo
 function updateLiveStats(stats) {
-    // Mostrar sección de resultados si no está visible
-    if (document.getElementById('results-section').style.display === 'none') {
-        document.getElementById('results-section').style.display = 'block';
-        initializeCharts();
+    // Crear o actualizar panel de estadísticas en vivo
+    let liveStatsDiv = document.getElementById('live-stats');
+    
+    if (!liveStatsDiv) {
+        // Crear panel si no existe
+        const progressSection = document.getElementById('progress-section');
+        liveStatsDiv = document.createElement('div');
+        liveStatsDiv.id = 'live-stats';
+        liveStatsDiv.className = 'mt-4';
+        liveStatsDiv.innerHTML = `
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Estadísticas en Tiempo Real</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <div class="stat-box">
+                                <i class="fas fa-users fa-2x text-primary mb-2"></i>
+                                <div class="stat-label">Detecciones</div>
+                                <div class="stat-value" id="live-detections">0</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-box">
+                                <i class="fas fa-futbol fa-2x text-success mb-2"></i>
+                                <div class="stat-label">Posesión</div>
+                                <div class="stat-value" id="live-possession">-</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-box">
+                                <i class="fas fa-bolt fa-2x text-warning mb-2"></i>
+                                <div class="stat-label">Eventos</div>
+                                <div class="stat-value" id="live-events">0</div>
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="stat-box">
+                                <i class="fas fa-tachometer-alt fa-2x text-info mb-2"></i>
+                                <div class="stat-label">FPS Procesado</div>
+                                <div class="stat-value" id="live-fps">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        progressSection.appendChild(liveStatsDiv);
     }
     
-    // Actualizar posesión
-    if (stats.possession_percent) {
-        const p0 = stats.possession_percent[0] || 0;
-        const p1 = stats.possession_percent[1] || 0;
-        
-        document.getElementById('possession-percent-0').textContent = p0.toFixed(1) + '%';
-        document.getElementById('possession-percent-1').textContent = p1.toFixed(1) + '%';
-        
-        document.getElementById('possession-bar-0').style.width = p0 + '%';
-        document.getElementById('possession-bar-1').style.width = p1 + '%';
+    // Actualizar valores
+    if (stats.detections !== undefined) {
+        document.getElementById('live-detections').textContent = stats.detections;
     }
     
-    // Actualizar tiempo
-    if (stats.possession_seconds) {
-        const t0 = stats.possession_seconds[0] || 0;
-        const t1 = stats.possession_seconds[1] || 0;
-        
-        document.getElementById('possession-time-0').textContent = t0.toFixed(1) + 's';
-        document.getElementById('possession-time-1').textContent = t1.toFixed(1) + 's';
+    if (stats.possession_team !== undefined) {
+        const possessionText = stats.possession_team >= 0 ? `Equipo ${stats.possession_team}` : 'Sin posesión';
+        document.getElementById('live-possession').textContent = possessionText;
     }
     
-    // Actualizar gráficos
-    if (possessionChart && stats.possession_percent) {
-        possessionChart.data.datasets[0].data = [
-            stats.possession_percent[0] || 0,
-            stats.possession_percent[1] || 0
-        ];
-        possessionChart.update('none');
+    if (stats.events !== undefined) {
+        document.getElementById('live-events').textContent = stats.events;
     }
     
-    if (passesChart && stats.passes) {
-        passesChart.data.datasets[0].data = [
-            stats.passes[0] || 0,
-            stats.passes[1] || 0
-        ];
-        passesChart.update('none');
+    if (stats.fps_processing !== undefined) {
+        document.getElementById('live-fps').textContent = stats.fps_processing + ' fps';
     }
 }
 
