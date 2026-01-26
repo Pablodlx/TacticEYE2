@@ -19,6 +19,11 @@ from modules.team_classifier_v2 import TeamClassifierV2
 from modules.possession_tracker_v2 import PossessionTrackerV2
 from modules.match_state import MatchState, TrackerState, TeamClassifierState, PossessionState
 
+# Imports de módulos de calibración y tracking espacial
+from modules.field_calibration import FieldCalibrator
+from modules.field_model import FieldModel, ZoneModel
+from modules.spatial_possession_tracker import SpatialPossessionTracker
+
 
 @dataclass
 class ChunkOutput:
@@ -71,7 +76,14 @@ class BatchProcessor:
         use_L: bool = True,
         L_weight: float = 0.5,
         # Parámetros de posesión
-        possession_distance: float = 50.0
+        possession_distance: float = 50.0,
+        # Parámetros de calibración espacial
+        enable_spatial_tracking: bool = True,
+        zone_partition_type: str = 'thirds_lanes',
+        zone_nx: int = 6,
+        zone_ny: int = 4,
+        enable_heatmaps: bool = True,
+        heatmap_resolution: Tuple[int, int] = (50, 34)
     ):
         """
         Inicializa el procesador de batches.
@@ -108,10 +120,24 @@ class BatchProcessor:
             'L_weight': L_weight
         }
         
+        # Parámetros de calibración espacial
+        self.enable_spatial_tracking = enable_spatial_tracking
+        self.spatial_params = {
+            'zone_partition_type': zone_partition_type,
+            'zone_nx': zone_nx,
+            'zone_ny': zone_ny,
+            'enable_heatmaps': enable_heatmaps,
+            'heatmap_resolution': heatmap_resolution
+        }
+        
         # Módulos del pipeline (se inicializan por match)
         self.tracker: Optional[ReIDTracker] = None
         self.team_classifier: Optional[TeamClassifierV2] = None
         self.possession_tracker: Optional[PossessionTrackerV2] = None
+        
+        # Módulos de calibración espacial
+        self.field_calibrator: Optional[FieldCalibrator] = None
+        self.spatial_tracker: Optional[SpatialPossessionTracker] = None
     
     def initialize_modules(self, match_state: MatchState):
         """
@@ -156,6 +182,39 @@ class BatchProcessor:
         self.possession_tracker.current_possession_player = match_state.possession_state.current_player
         self.possession_tracker.total_frames_by_team = match_state.possession_state.frames_by_team.copy()
         self.possession_tracker.passes_by_team = match_state.possession_state.passes_by_team.copy()
+        
+        # 4. Calibración de campo y tracking espacial
+        if self.enable_spatial_tracking:
+            print("✓ Inicializando calibración automática de campo...")
+            
+            # Inicializar calibrador
+            self.field_calibrator = FieldCalibrator(
+                use_temporal_filter=True,
+                min_confidence=0.5
+            )
+            
+            # Inicializar modelo de zonas
+            zone_model = ZoneModel(
+                field_model=self.field_calibrator.field_model,
+                partition_type=self.spatial_params['zone_partition_type'],
+                nx=self.spatial_params['zone_nx'],
+                ny=self.spatial_params['zone_ny']
+            )
+            
+            # Inicializar tracker espacial
+            self.spatial_tracker = SpatialPossessionTracker(
+                calibrator=self.field_calibrator,
+                zone_model=zone_model,
+                enable_heatmaps=self.spatial_params['enable_heatmaps'],
+                heatmap_resolution=self.spatial_params['heatmap_resolution']
+            )
+            
+            print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
+            print(f"  - Número de zonas: {zone_model.num_zones}")
+            print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
+        else:
+            self.field_calibrator = None
+            self.spatial_tracker = None
     
     def save_modules_state(self, match_state: MatchState):
         """
@@ -377,10 +436,9 @@ class BatchProcessor:
                     # Referee o ball
                     obj['team_id'] = -1
             
-            # Generar visualización periódicamente
+            # Enviar frame original (sin anotaciones) periódicamente
             if send_visualization and (i % visualize_interval == 0 or i == len(frames) - 1):
-                annotated = self._create_annotated_frame(frame.copy(), tracked_objects, frame_idx)
-                send_visualization(annotated, frame_idx)
+                send_visualization(frame, frame_idx)
             
             # 4. DETECCIÓN DE POSESIÓN
             ball_owner_team = -1
@@ -431,6 +489,32 @@ class BatchProcessor:
                 ball_owner_id if ball_owner_id >= 0 else None
             )
             
+            # 4.5. TRACKING ESPACIAL (si está habilitado)
+            spatial_info = {}
+            if self.enable_spatial_tracking and self.spatial_tracker is not None:
+                # Calibrar frecuentemente al inicio, luego espaciadamente
+                should_calibrate = (
+                    (start_frame_idx + i) < 300 or  # Primeros 300 frames: siempre
+                    (i % 30 == 0)                    # Después: cada 30 frames
+                )
+                
+                # Actualizar tracker espacial con la posición del poseedor
+                spatial_state = self.spatial_tracker.update(
+                    ball_pos=ball_bbox[:2] if ball_bbox is not None else None,
+                    players=tracked_objects,
+                    frame=frame if should_calibrate else None
+                )
+                
+                spatial_info = {
+                    'field_position': spatial_state.get('field_position'),
+                    'zone_id': spatial_state.get('zone_id', -1),
+                    'zone_name': self.spatial_tracker.zone_model.get_zone_name(
+                        spatial_state.get('zone_id', -1)
+                    ) if spatial_state.get('zone_id', -1) >= 0 else 'unknown',
+                    'calibration_valid': spatial_state.get('calibration_valid', False),
+                    'position_fallback': spatial_state.get('position_fallback', False)
+                }
+            
             # Detectar cambio de equipo
             new_possession_team = self.possession_tracker.current_possession_team
             if prev_possession_team is not None and new_possession_team != prev_possession_team:
@@ -463,13 +547,14 @@ class BatchProcessor:
                 'frame': frame_idx,
                 'objects': tracked_objects,
                 'ball_owner': ball_owner_id,
-                'possession_team': ball_owner_team
+                'possession_team': ball_owner_team,
+                'spatial_info': spatial_info  # Añadir info espacial
             }
             
-            # Guardar posiciones de jugadores
+            # Guardar posiciones de jugadores (con info espacial si disponible)
             for obj in tracked_objects:
                 if obj['class_name'] == 'player':
-                    player_positions.append({
+                    pos_data = {
                         'frame': frame_idx,
                         'timestamp': frame_idx / fps,
                         'player_id': obj['track_id'],
@@ -477,7 +562,16 @@ class BatchProcessor:
                         'bbox': obj['bbox'].tolist(),
                         'position': [(obj['bbox'][0] + obj['bbox'][2]) / 2,
                                    (obj['bbox'][1] + obj['bbox'][3]) / 2]
-                    })
+                    }
+                    
+                    # Añadir posición de campo si está disponible y es el poseedor
+                    if (self.enable_spatial_tracking and 
+                        obj['track_id'] == ball_owner_id and 
+                        spatial_info.get('field_position') is not None):
+                        pos_data['field_position'] = spatial_info['field_position']
+                        pos_data['zone_id'] = spatial_info.get('zone_id', -1)
+                    
+                    player_positions.append(pos_data)
         
         # Actualizar estado del partido
         end_frame_idx = start_frame_idx + len(frames) - 1
@@ -494,6 +588,22 @@ class BatchProcessor:
             'possession_team': self.possession_tracker.current_possession_team,
             'possession_player': self.possession_tracker.current_possession_player,
         }
+        
+        # Añadir estadísticas espaciales si están habilitadas
+        if self.enable_spatial_tracking and self.spatial_tracker is not None:
+            spatial_stats = self.spatial_tracker.get_spatial_statistics()
+            zone_stats = self.spatial_tracker.get_zone_statistics()
+            
+            chunk_stats['spatial'] = {
+                'calibration_valid': self.field_calibrator.has_valid_calibration(),
+                'possession_by_zone': spatial_stats.get('possession_by_zone', {}),
+                'zone_percentages': spatial_stats.get('zone_percentages', {}),
+                'zone_partition_type': zone_stats.get('partition_type', 'unknown'),
+                'num_zones': zone_stats.get('num_zones', 0)
+            }
+            
+            # No incluir heatmaps en chunk_stats (son muy grandes)
+            # Se exportarán al final del análisis
         
         processing_time_ms = (time.time() - start_time) * 1000
         
@@ -645,3 +755,53 @@ def load_match_outputs(match_id: str, output_dir: str = "outputs_streaming") -> 
         outputs.append(output)
     
     return outputs
+
+
+def export_spatial_heatmaps(processor: BatchProcessor, 
+                           output_path: str = "heatmaps.npz"):
+    """
+    Exporta los heatmaps espaciales generados durante el análisis.
+    
+    Args:
+        processor: BatchProcessor con spatial_tracker inicializado
+        output_path: Ruta donde guardar los heatmaps
+    
+    Returns:
+        True si se exportaron correctamente, False si no hay datos
+    """
+    if not processor.enable_spatial_tracking or processor.spatial_tracker is None:
+        print("⚠ Tracking espacial no está habilitado")
+        return False
+    
+    # Exportar heatmaps
+    heatmap_0 = processor.spatial_tracker.export_heatmap(team_id=0, normalize=True)
+    heatmap_1 = processor.spatial_tracker.export_heatmap(team_id=1, normalize=True)
+    
+    if heatmap_0 is None or heatmap_1 is None:
+        print("⚠ No se generaron heatmaps (heatmaps deshabilitados)")
+        return False
+    
+    # Obtener estadísticas espaciales
+    spatial_stats = processor.spatial_tracker.get_spatial_statistics()
+    zone_stats = processor.spatial_tracker.get_zone_statistics()
+    
+    # Guardar en formato NPZ
+    np.savez(
+        output_path,
+        team_0_heatmap=heatmap_0,
+        team_1_heatmap=heatmap_1,
+        possession_by_zone_team_0=spatial_stats['possession_by_zone'][0],
+        possession_by_zone_team_1=spatial_stats['possession_by_zone'][1],
+        zone_percentages_team_0=spatial_stats['zone_percentages'][0],
+        zone_percentages_team_1=spatial_stats['zone_percentages'][1],
+        metadata={
+            'resolution': processor.spatial_params['heatmap_resolution'],
+            'partition_type': zone_stats['partition_type'],
+            'num_zones': zone_stats['num_zones'],
+            'field_dims': (105.0, 68.0)  # Dimensiones del campo en metros
+        }
+    )
+    
+    print(f"✓ Heatmaps guardados en: {output_path}")
+    return True
+

@@ -48,6 +48,14 @@ class AnalysisConfig:
     use_L_channel: bool = True
     L_weight: float = 0.5
     
+    # Spatial Tracking (NUEVO)
+    enable_spatial_tracking: bool = False
+    zone_partition_type: str = 'thirds_lanes'
+    zone_nx: int = 6
+    zone_ny: int = 4
+    enable_heatmaps: bool = True
+    heatmap_resolution: tuple = (50, 34)
+    
     # Storage
     storage: Optional[StateStorage] = None
     output_dir: str = "outputs_streaming"
@@ -153,7 +161,14 @@ def run_match_analysis(
                 kmeans_min_tracks=config.kmeans_min_tracks,
                 vote_history=config.vote_history,
                 use_L=config.use_L_channel,
-                L_weight=config.L_weight
+                L_weight=config.L_weight,
+                # Parámetros espaciales (NUEVO)
+                enable_spatial_tracking=config.enable_spatial_tracking,
+                zone_partition_type=config.zone_partition_type,
+                zone_nx=config.zone_nx,
+                zone_ny=config.zone_ny,
+                enable_heatmaps=config.enable_heatmaps,
+                heatmap_resolution=config.heatmap_resolution
             )
             
             # 4. LOOP DE MICRO-BATCHING
@@ -273,6 +288,46 @@ def run_match_analysis(
             print(f"  Pases Team 1: {summary['passes']['by_team'].get(1, 0)}")
             print(f"  Jugadores Team 0: {summary['teams']['team_0_players']}")
             print(f"  Jugadores Team 1: {summary['teams']['team_1_players']}")
+            
+            # Exportar heatmaps espaciales si están disponibles
+            if config.enable_spatial_tracking and processor.spatial_tracker is not None:
+                print()
+                print("ESTADÍSTICAS ESPACIALES:")
+                
+                if processor.field_calibrator.has_valid_calibration():
+                    print("  ✓ Calibración de campo: VÁLIDA")
+                else:
+                    print("  ⚠ Calibración de campo: NO DISPONIBLE")
+                
+                # Exportar heatmaps
+                import os
+                heatmap_path = os.path.join(config.output_dir, f"{match_id}_heatmaps.npz")
+                
+                from modules.batch_processor import export_spatial_heatmaps
+                if export_spatial_heatmaps(processor, heatmap_path):
+                    print(f"  ✓ Heatmaps exportados: {heatmap_path}")
+                
+                # Obtener y mostrar estadísticas por zona
+                zone_stats = processor.spatial_tracker.get_zone_statistics()
+                print(f"  Tipo de partición: {zone_stats['partition_type']}")
+                print(f"  Número de zonas: {zone_stats['num_zones']}")
+                
+                # Mostrar top 3 zonas por equipo
+                spatial_stats = processor.spatial_tracker.get_spatial_statistics()
+                for team_id in [0, 1]:
+                    zone_times = spatial_stats['possession_by_zone'][team_id]
+                    total = sum(zone_times)
+                    
+                    if total > 0:
+                        zone_list = list(enumerate(zone_times))
+                        zone_list.sort(key=lambda x: x[1], reverse=True)
+                        
+                        print(f"\n  Top 3 zonas Team {team_id}:")
+                        for zone_id, frames in zone_list[:3]:
+                            if frames > 0:
+                                zone_name = processor.spatial_tracker.zone_model.get_zone_name(zone_id)
+                                pct = (frames / total) * 100
+                                print(f"    - {zone_name}: {pct:.1f}%")
             print()
             
             return match_state

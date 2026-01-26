@@ -1,0 +1,1 @@
+[{"type": "pass", "frame": 1898, "timestamp": 63.266666666666666, "team": 0, "from_player": 18, "to_player": 21}, {"type": "possession_change", "frame": 1923, "timestamp": 64.1, "from_team": 0, "to_team": 1, "player_id": 21}, {"type": "pass", "frame": 1961, "timestamp": 65.36666666666666, "team": 1, "from_player": 21, "to_player": 14}]

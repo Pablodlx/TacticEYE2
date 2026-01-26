@@ -219,6 +219,56 @@ async def get_status(session_id: str):
     })
 
 
+@app.get("/api/heatmap/{session_id}/{team_id}")
+async def get_heatmap(session_id: str, team_id: int):
+    """Obtener heatmap de un equipo como imagen PNG"""
+    import io
+    from PIL import Image
+    from matplotlib import cm
+    
+    try:
+        # Buscar archivo de heatmaps
+        heatmap_path = OUTPUT_DIR / f"{session_id}_heatmaps.npz"
+        
+        if not heatmap_path.exists():
+            # Buscar en subdirectorio
+            heatmap_path = OUTPUT_DIR / session_id / f"{session_id}_heatmaps.npz"
+        
+        if not heatmap_path.exists():
+            return JSONResponse({"success": False, "error": "Heatmap no encontrado"}, status_code=404)
+        
+        # Cargar heatmap
+        data = np.load(str(heatmap_path))
+        heatmap = data[f'team_{team_id}_heatmap']
+        
+        # Aplicar colormap
+        if team_id == 0:
+            colored = cm.Greens(heatmap)
+        else:
+            colored = cm.Reds(heatmap)
+        
+        # Convertir a imagen
+        img_array = (colored[:,:,:3] * 255).astype(np.uint8)
+        img = Image.fromarray(img_array)
+        
+        # Redimensionar para visualización (mantener aspect ratio del campo)
+        img = img.resize((525, 340), Image.BILINEAR)
+        
+        # Guardar en buffer
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="image/png")
+        
+    except Exception as e:
+        print(f"Error al generar heatmap: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
 async def process_video(session_id: str):
     """Procesar video con tracking, clasificación y posesión (versión async wrapper)"""
     import asyncio
@@ -304,6 +354,9 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                 total_detections = chunk_stats.get('detections_count', 0)
                 events_count = chunk_stats.get('events_count', 0)
                 
+                # Estadísticas espaciales
+                spatial_stats = chunk_stats.get('spatial', {})
+                
                 loop.run_until_complete(manager.send_update(session_id, {
                     "type": "batch_complete",
                     "batch_idx": batch_idx,
@@ -317,7 +370,15 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                         "detections": total_detections,
                         "events": events_count,
                         "current_team": possession_data['current_team'],
-                        "current_player": possession_data['current_player']
+                        "current_player": possession_data['current_player'],
+                        # Estadísticas espaciales
+                        "spatial": {
+                            "calibration_valid": spatial_stats.get('calibration_valid', False),
+                            "possession_by_zone": spatial_stats.get('possession_by_zone', {}),
+                            "zone_percentages": spatial_stats.get('zone_percentages', {}),
+                            "partition_type": spatial_stats.get('zone_partition_type', 'thirds_lanes'),
+                            "num_zones": spatial_stats.get('num_zones', 9)
+                        }
                     },
                     "message": f"✓ Batch {batch_idx + 1} completado: Team 0: {possession_percent[0]:.1f}%, Team 1: {possession_percent[1]:.1f}%"
                 }))
@@ -347,7 +408,12 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             on_progress=on_progress,
             on_batch_complete=on_batch_complete,
             on_error=on_error,
-            on_frame_visualized=on_frame_visualized
+            on_frame_visualized=on_frame_visualized,
+            # Spatial tracking habilitado
+            enable_spatial_tracking=True,
+            zone_partition_type='thirds_lanes',
+            enable_heatmaps=True,
+            heatmap_resolution=(50, 34)
         )
         
         # Ejecutar análisis con micro-batching

@@ -5,8 +5,94 @@ let possessionChart = null;
 let passesChart = null;
 let timelineChart = null;
 
+// Función para reiniciar la interfaz
+function resetInterface() {
+    // Cerrar WebSocket si existe
+    if (websocket) {
+        websocket.close();
+        websocket = null;
+    }
+    
+    // Resetear session ID
+    currentSessionId = null;
+    
+    // Limpiar gráficos
+    if (possessionChart) {
+        possessionChart.destroy();
+        possessionChart = null;
+    }
+    if (passesChart) {
+        passesChart.destroy();
+        passesChart = null;
+    }
+    if (timelineChart) {
+        timelineChart.destroy();
+        timelineChart = null;
+    }
+    
+    // Mostrar sección de upload, ocultar progreso y resultados
+    document.getElementById('upload-section').style.display = 'block';
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('results-section').style.display = 'none';
+    
+    // Limpiar formularios
+    const fileInput = document.getElementById('videoFile');
+    if (fileInput) fileInput.value = '';
+    
+    const urlInput = document.getElementById('videoUrl');
+    if (urlInput) urlInput.value = '';
+    
+    const fileInfo = document.getElementById('file-info');
+    if (fileInfo) fileInfo.style.display = 'none';
+    
+    const statusDiv = document.getElementById('upload-status');
+    if (statusDiv) statusDiv.innerHTML = '';
+    
+    // Limpiar canvas de video
+    const videoCanvas = document.getElementById('video-canvas');
+    if (videoCanvas) {
+        const ctx = videoCanvas.getContext('2d');
+        ctx.clearRect(0, 0, videoCanvas.width, videoCanvas.height);
+    }
+    
+    // Limpiar progress bar
+    const progressBar = document.querySelector('.progress-bar');
+    if (progressBar) {
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+    }
+    
+    // Limpiar textos de progreso
+    const progressText = document.getElementById('progress-text');
+    if (progressText) progressText.textContent = 'Esperando inicio...';
+    
+    const currentFrame = document.getElementById('current-frame');
+    if (currentFrame) currentFrame.textContent = '0';
+    
+    const totalFrames = document.getElementById('total-frames');
+    if (totalFrames) totalFrames.textContent = '0';
+    
+    console.log('Interface reset - ready for new analysis');
+}
+
 // File selection handler
 document.addEventListener('DOMContentLoaded', function() {
+    // Event listener para el logo
+    const brandLogo = document.getElementById('brand-logo');
+    if (brandLogo) {
+        brandLogo.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            // Confirmar si hay un análisis en curso
+            if (currentSessionId && websocket) {
+                if (confirm('¿Estás seguro de que quieres cancelar el análisis actual y volver al inicio?')) {
+                    resetInterface();
+                }
+            } else {
+                resetInterface();
+            }
+        });
+    }
     console.log('DOM loaded, initializing file handlers...');
     
     const fileInput = document.getElementById('videoFile');
@@ -324,8 +410,17 @@ function updateBatchComplete(data) {
     
     // Actualizar estadísticas en tiempo real
     if (data.stats) {
+        console.log('Stats recibidas:', data.stats);
         updateLiveStats(data.stats);
         updateLiveCharts(data.stats);
+        
+        // Actualizar estadísticas espaciales si están disponibles
+        if (data.stats.spatial) {
+            console.log('Spatial stats:', data.stats.spatial);
+            updateSpatialStats(data.stats.spatial);
+        } else {
+            console.warn('No spatial stats en este batch');
+        }
     }
 }
 
@@ -662,4 +757,132 @@ function showError(message) {
     
     const statusDiv = document.getElementById('upload-status');
     statusDiv.innerHTML = `<div class="alert alert-danger">Error: ${message}</div>`;
+}
+
+// Actualizar estadísticas espaciales
+function updateSpatialStats(spatial) {
+    console.log('updateSpatialStats llamada con:', spatial);
+    
+    if (!spatial) {
+        console.warn('No hay datos espaciales');
+        return;
+    }
+    
+    // Mostrar sección de heatmaps
+    const heatmapsSection = document.getElementById('spatial-heatmaps-section');
+    if (heatmapsSection) {
+        console.log('Mostrando sección de heatmaps');
+        heatmapsSection.style.display = 'block';
+    } else {
+        console.error('No se encontró el elemento spatial-heatmaps-section');
+    }
+    
+    // Actualizar estado de calibración
+    const calibrationStatus = document.getElementById('calibration-status');
+    const spatialStatusMessage = document.getElementById('spatial-status-message');
+    
+    if (calibrationStatus) {
+        if (spatial.calibration_valid) {
+            calibrationStatus.innerHTML = '<i class="fas fa-check-circle"></i> Calibrated';
+            calibrationStatus.className = 'badge bg-success';
+            if (spatialStatusMessage) {
+                spatialStatusMessage.innerHTML = '<small>✅ Field calibration successful! Heatmaps are being generated.</small>';
+            }
+        } else {
+            calibrationStatus.innerHTML = '<i class="fas fa-exclamation-triangle"></i> No Calibration';
+            calibrationStatus.className = 'badge bg-warning';
+            if (spatialStatusMessage) {
+                spatialStatusMessage.innerHTML = '<small>⚠️ Field lines not detected. Heatmaps require visible field markings.</small>';
+            }
+        }
+    }
+    
+    // Actualizar info de partición
+    const partitionTypeText = document.getElementById('partition-type-text');
+    if (partitionTypeText) {
+        partitionTypeText.textContent = spatial.partition_type || 'thirds_lanes';
+    }
+    
+    const numZonesText = document.getElementById('num-zones-text');
+    if (numZonesText) {
+        numZonesText.textContent = spatial.num_zones || 9;
+    }
+    
+    // Actualizar heatmaps (usando sessionId actual)
+    if (currentSessionId && spatial.calibration_valid) {
+        updateHeatmapImages();
+    }
+    
+    // Mostrar top zonas
+    if (spatial.zone_percentages) {
+        updateTopZones(0, spatial.zone_percentages['0'] || spatial.zone_percentages[0]);
+        updateTopZones(1, spatial.zone_percentages['1'] || spatial.zone_percentages[1]);
+    }
+}
+
+// Actualizar imágenes de heatmaps
+function updateHeatmapImages() {
+    if (!currentSessionId) {
+        console.warn('No hay currentSessionId para actualizar heatmaps');
+        return;
+    }
+    
+    const timestamp = new Date().getTime();
+    
+    console.log('Actualizando heatmaps para session:', currentSessionId);
+    
+    const heatmapTeam0 = document.getElementById('heatmap-team-0');
+    if (heatmapTeam0) {
+        const url = `/api/heatmap/${currentSessionId}/0?t=${timestamp}`;
+        console.log('Cargando heatmap Team 0:', url);
+        heatmapTeam0.src = url;
+    } else {
+        console.error('No se encontró elemento heatmap-team-0');
+    }
+    
+    const heatmapTeam1 = document.getElementById('heatmap-team-1');
+    if (heatmapTeam1) {
+        const url = `/api/heatmap/${currentSessionId}/1?t=${timestamp}`;
+        console.log('Cargando heatmap Team 1:', url);
+        heatmapTeam1.src = url;
+    } else {
+        console.error('No se encontró elemento heatmap-team-1');
+    }
+}
+
+// Actualizar top zonas
+function updateTopZones(teamId, zonePercentages) {
+    if (!zonePercentages || !Array.isArray(zonePercentages)) return;
+    
+    const zoneNames = [
+        'Defensive Left', 'Defensive Center', 'Defensive Right',
+        'Midfield Left', 'Midfield Center', 'Midfield Right',
+        'Offensive Left', 'Offensive Center', 'Offensive Right'
+    ];
+    
+    // Crear array de zonas con índice y porcentaje
+    const zones = zonePercentages.map((pct, idx) => ({
+        index: idx,
+        name: zoneNames[idx] || `Zone ${idx}`,
+        percent: pct
+    }));
+    
+    // Ordenar por porcentaje descendente
+    zones.sort((a, b) => b.percent - a.percent);
+    
+    // Tomar top 3
+    const top3 = zones.slice(0, 3).filter(z => z.percent > 0);
+    
+    // Actualizar HTML
+    const topZonesDiv = document.getElementById(`top-zones-team-${teamId}`);
+    if (topZonesDiv) {
+        if (top3.length === 0) {
+            topZonesDiv.innerHTML = '<span class="badge bg-secondary">No data yet</span>';
+        } else {
+            const badgeClass = teamId === 0 ? 'bg-success' : 'bg-danger';
+            topZonesDiv.innerHTML = top3.map((zone, i) => 
+                `<span class="badge ${badgeClass} me-1">${i + 1}. ${zone.name} (${zone.percent.toFixed(1)}%)</span>`
+            ).join('');
+        }
+    }
 }

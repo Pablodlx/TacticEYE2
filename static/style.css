@@ -601,3 +601,46 @@ canvas {
         transform: translateY(0);
     }
 }
+
+/* ====================
+   Spatial Heatmaps
+   ==================== */
+
+.heatmap-container {
+    position: relative;
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 10px;
+}
+
+.heatmap-container img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
+#spatial-heatmaps-section .card-header {
+    background: linear-gradient(135deg, var(--secondary-blue) 0%, var(--primary-blue) 100%);
+    color: var(--text-primary);
+    border-bottom: 2px solid var(--accent-green);
+}
+
+#calibration-status {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.8rem;
+}
+
+#spatial-info {
+    background: rgba(59, 130, 246, 0.1);
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+}
+
+#top-zones-team-0 .badge,
+#top-zones-team-1 .badge {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.6rem;
+    margin-bottom: 0.25rem;
+    display: inline-block;
+}

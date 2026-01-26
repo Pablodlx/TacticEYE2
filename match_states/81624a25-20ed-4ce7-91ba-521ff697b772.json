@@ -1,0 +1,126 @@
+{
+  "match_id": "81624a25-20ed-4ce7-91ba-521ff697b772",
+  "source_type": "youtube_vod",
+  "source_url": "https://youtube.com/live/gx0cT2JTRdU?feature=share",
+  "fps": 30.0,
+  "status": "completed",
+  "total_frames_processed": 2550,
+  "last_batch_idx": 84,
+  "last_update": "2026-01-23T18:42:00.882904",
+  "tracker_state": {
+    "active_tracks": {},
+    "next_id": 22,
+    "lost_tracks": {},
+    "last_frame_idx": 2550
+  },
+  "team_classifier_state": {
+    "player_team_map": {
+      "5": 0,
+      "3": 0,
+      "15": 0,
+      "7": 0,
+      "11": 1,
+      "1": 1,
+      "8": 1,
+      "17": 1,
+      "2": 1,
+      "9": 1,
+      "16": 0,
+      "6": 1,
+      "21": 0,
+      "12": 0,
+      "4": 1,
+      "18": 0,
+      "13": 1,
+      "19": 0,
+      "10": 0,
+      "14": 1,
+      "20": 0
+    },
+    "vote_history": {},
+    "team_colors": {
+      "0": [
+        119.7249984741211,
+        125.5999984741211,
+        133.5
+      ],
+      "1": [
+        55.57500076293945,
+        133.40000915527344,
+        125.25
+      ]
+    },
+    "trained_frames": 0,
+    "is_trained": true
+  },
+  "possession_state": {
+    "current_team": 0,
+    "current_player": 5,
+    "frames_by_team": {
+      "0": 2281,
+      "1": 0,
+      "-1": 0
+    },
+    "passes_by_team": {
+      "0": 9,
+      "1": 0
+    },
+    "possession_changes": [],
+    "last_frame_idx": 2550
+  },
+  "cached_summary": {
+    "match_id": "81624a25-20ed-4ce7-91ba-521ff697b772",
+    "status": "running",
+    "progress": {
+      "total_frames": 2550,
+      "total_seconds": 85.0,
+      "last_batch": 84,
+      "last_update": "2026-01-23T18:42:00.881656"
+    },
+    "possession": {
+      "current_team": 0,
+      "current_player": 5,
+      "percent_by_team": {
+        "0": 100.0,
+        "1": 0.0,
+        "-1": 0.0
+      },
+      "seconds_by_team": {
+        "0": 76.03333333333333,
+        "1": 0.0,
+        "-1": 0.0
+      },
+      "frames_by_team": {
+        "0": 2281,
+        "1": 0,
+        "-1": 0
+      }
+    },
+    "passes": {
+      "by_team": {
+        "0": 9,
+        "1": 0
+      },
+      "total": 9
+    },
+    "teams": {
+      "total_players": 21,
+      "team_0_players": 11,
+      "team_1_players": 10
+    },
+    "tracking": {
+      "active_tracks": 0,
+      "total_ids": 22
+    }
+  },
+  "metadata": {
+    "video_metadata": {
+      "fps": 30.0,
+      "width": 1280,
+      "height": 720,
+      "total_frames": -3074457345618259,
+      "duration_seconds": -102481911520608.64,
+      "is_live": false
+    }
+  }
+}

@@ -12,7 +12,7 @@
     <!-- Top Navigation -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-tactic">
         <div class="container-fluid px-4">
-            <a class="navbar-brand d-flex align-items-center" href="#">
+            <a class="navbar-brand d-flex align-items-center" href="/" style="cursor: pointer;">
                 <div class="brand-logo">
                     <i class="fas fa-eye"></i>
                 </div>
@@ -210,6 +210,58 @@
                                 </div>
                                 <div class="card-body">
                                     <canvas id="passesChart" height="200"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Spatial Possession Heatmaps (NEW) -->
+                    <div id="spatial-heatmaps-section" class="row mb-4">
+                        <div class="col-12 mb-3">
+                            <div class="card">
+                                <div class="card-header">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <h5 class="mb-0"><i class="fas fa-map-marked-alt me-2"></i>Field Possession Heatmaps</h5>
+                                        <span id="calibration-status" class="badge bg-secondary">
+                                            <i class="fas fa-spinner fa-spin"></i> Calibrating...
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="row">
+                                        <div class="col-lg-6 mb-3">
+                                            <h6 class="text-center text-success mb-3">Team 0 - Heat Map</h6>
+                                            <div class="heatmap-container">
+                                                <img id="heatmap-team-0" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='525' height='340'%3E%3Crect fill='%23e9ecef' width='525' height='340'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' fill='%236c757d' font-size='18' font-family='Arial'%3EWaiting for calibration...%3C/text%3E%3C/svg%3E" alt="Team 0 Heatmap" class="img-fluid" style="width: 100%; border: 2px solid #28a745; border-radius: 8px; background: #f8f9fa; min-height: 200px;">
+                                                <div class="text-center mt-2">
+                                                    <small class="text-muted">Zones with highest possession:</small>
+                                                    <div id="top-zones-team-0" class="mt-1">
+                                                        <span class="badge bg-secondary">No data yet</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="col-lg-6 mb-3">
+                                            <h6 class="text-center text-danger mb-3">Team 1 - Heat Map</h6>
+                                            <div class="heatmap-container">
+                                                <img id="heatmap-team-1" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='525' height='340'%3E%3Crect fill='%23e9ecef' width='525' height='340'/%3E%3Ctext x='50%25' y='50%25' text-anchor='middle' fill='%236c757d' font-size='18' font-family='Arial'%3EWaiting for calibration...%3C/text%3E%3C/svg%3E" alt="Team 1 Heatmap" class="img-fluid" style="width: 100%; border: 2px solid #dc3545; border-radius: 8px; background: #f8f9fa; min-height: 200px;">
+                                                <div class="text-center mt-2">
+                                                    <small class="text-muted">Zones with highest possession:</small>
+                                                    <div id="top-zones-team-1" class="mt-1">
+                                                        <span class="badge bg-secondary">No data yet</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="alert alert-info mt-3" id="spatial-info">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        <strong>Partition Type:</strong> <span id="partition-type-text">thirds_lanes</span> 
+                                        (<span id="num-zones-text">9</span> zones)
+                                        <div class="mt-2" id="spatial-status-message">
+                                            <small>🔄 Analyzing field... Heatmaps will appear when calibration is complete.</small>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
