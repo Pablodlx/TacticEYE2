@@ -35,7 +35,9 @@ try:
         estimate_homography_with_flip_resolution
     )
 except Exception as e:
-    print(f"Error importando módulos: {e}")
+    print(f"❌ Error importando módulos: {e}")
+    traceback.print_exc()
+    raise  # Re-lanzar el error para que sea visible
 
 app = FastAPI(title="TacticEYE2 Web")
 
@@ -304,13 +306,17 @@ async def generate_keypoints_heatmap(data_file, team_id: int, session_id: str):
         ax.plot(11, 34, 'o', color=field_color, markersize=4)
         ax.plot(94, 34, 'o', color=field_color, markersize=4)
         
-        # Heatmap
-        cmap = cm.Greens if team_id == 0 else cm.Reds
-        title_color = '#4ade80' if team_id == 0 else '#f87171'
+        # Heatmap con mejor visualización
+        if team_id == 0:
+            cmap = cm.YlGn  # Amarillo-Verde para team 0
+            title_color = '#22c55e'
+        else:
+            cmap = cm.YlOrRd  # Amarillo-Naranja-Rojo para team 1
+            title_color = '#ef4444'
         
         extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
         ax.imshow(heatmap_norm, extent=extent, origin='lower', 
-                 cmap=cmap, alpha=0.6, interpolation='bilinear')
+                 cmap=cmap, alpha=0.75, interpolation='gaussian', vmin=0, vmax=1)
         
         # Título
         ax.set_title(f'Team {team_id} Heatmap - Basado en Keypoints\n({len(team_data)} posiciones)',
@@ -419,11 +425,16 @@ async def get_heatmap(session_id: str, team_id: int):
         if heatmap.sum() == 0:
             logger.warning(f"Heatmap para team {team_id} está vacío (sum=0). Generando imagen de advertencia.")
         
-        # Normalizar heatmap para mejor visualización
-        if heatmap.max() > 0:
-            heatmap_norm = heatmap / heatmap.max()
+        # Normalizar y suavizar heatmap para mejor visualización
+        from scipy.ndimage import gaussian_filter
+        
+        # Suavizar con filtro gaussiano para gradientes más suaves
+        heatmap_smooth = gaussian_filter(heatmap, sigma=2.5)
+        
+        if heatmap_smooth.max() > 0:
+            heatmap_norm = heatmap_smooth / heatmap_smooth.max()
         else:
-            heatmap_norm = heatmap
+            heatmap_norm = heatmap_smooth
         
         # Crear figura con matplotlib para mejor visualización
         import matplotlib
@@ -464,19 +475,19 @@ async def get_heatmap(session_id: str, team_id: int):
         ax.plot([0.843, 0.843], [0.296, 0.704], color=field_color, linewidth=field_lw)
         ax.plot([0.843, 1], [0.704, 0.704], color=field_color, linewidth=field_lw)
         
-        # Superponer heatmap con transparencia
+        # Superponer heatmap con transparencia y mejor colormap
         if team_id == 0:
-            cmap = cm.Greens
-            title_color = '#4ade80'
+            cmap = cm.YlGn  # Amarillo-Verde para team 0
+            title_color = '#22c55e'
         else:
-            cmap = cm.Reds
-            title_color = '#f87171'
+            cmap = cm.YlOrRd  # Amarillo-Naranja-Rojo para team 1
+            title_color = '#ef4444'
         
         # Flip verticalmente para que coincida con orientación del campo
         heatmap_display = np.flipud(heatmap_norm)
         
         im = ax.imshow(heatmap_display, extent=[0, 1, 0, 1], cmap=cmap, 
-                      alpha=0.7, interpolation='bilinear', origin='lower')
+                      alpha=0.8, interpolation='gaussian', origin='lower', vmin=0, vmax=1)
         
         # Título con información clara
         team_name = f"Team {team_id}"

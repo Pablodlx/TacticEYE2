@@ -512,8 +512,8 @@ class BatchProcessor:
         player_positions = []
         events = []
         
-        # Acumulador de posiciones para heatmap (posiciones medias por ID en el batch)
-        player_positions_accumulator = {}  # {track_id: {'team_id': int, 'positions': [(x,y), ...]}}
+        # Acumulador de posiciones PROYECTADAS para heatmap (media de posiciones de campo por batch)
+        player_field_positions_accumulator = {}  # {track_id: {'team_id': int, 'field_positions': [(x,y), ...]}}
         best_homography_batch = None
         best_homography_is_flipped = False
         best_homography_num_kp = 0  # Número de keypoints de la mejor homografía
@@ -659,19 +659,14 @@ class BatchProcessor:
                         # Siempre intentar acumular keypoints (aunque sean 0)
                         success = self.field_calibrator_keypoints.estimate_homography(current_keypoints)
                         
-                        # Log solo cada 30 frames para no saturar
-                        if frame_idx % 30 == 0:
+                        # Log solo cada 30 frames Y solo si hay calibración exitosa
+                        if frame_idx % 30 == 0 and success:
                             num_detected = len(current_keypoints)
                             num_accumulated = len(self.field_calibrator_keypoints.accumulated_keypoints)
-                            
-                            if success:
-                                info = self.field_calibrator_keypoints.get_calibration_info()
-                                print(f"[Calibración] ✓ Frame {frame_idx}: {num_detected} detectados, "
-                                      f"{num_accumulated} acumulados, calibrado con {info['num_keypoints']} keypoints "
-                                      f"(error={info['reprojection_error']:.2f}px)")
-                            else:
-                                print(f"[Calibración] ⏳ Frame {frame_idx}: {num_detected} detectados, "
-                                      f"{num_accumulated} acumulados (necesita {self.field_calibrator_keypoints.min_keypoints} para calibrar)")
+                            info = self.field_calibrator_keypoints.get_calibration_info()
+                            print(f"[Calibración] ✓ Frame {frame_idx}: {num_detected} detectados, "
+                                  f"{num_accumulated} acumulados, calibrado con {info['num_keypoints']} keypoints "
+                                  f"(error={info['reprojection_error']:.2f}px)")
                             
                     except Exception as e:
                         if frame_idx % 60 == 0:
@@ -718,15 +713,42 @@ class BatchProcessor:
                                 center_x = (bbox[0] + bbox[2]) / 2
                                 center_y = (bbox[1] + bbox[3]) / 2
                                 
-                                # Inicializar acumulador para este ID si no existe
-                                if track_id not in player_positions_accumulator:
-                                    player_positions_accumulator[track_id] = {
-                                        'team_id': team_id,
-                                        'positions': []
-                                    }
-                                
-                                # Acumular posición en píxeles
-                                player_positions_accumulator[track_id]['positions'].append((center_x, center_y))
+                                # PROYECTAR frame a frame usando keypoints del FRAME ACTUAL (no acumulados)
+                                # Esto evita problemas cuando la cámara cambia de ángulo
+                                if current_keypoints and len(current_keypoints) >= 2:
+                                    # Convertir diccionario de keypoints a lista para project_points_by_triangulation
+                                    # current_keypoints es {name: (x, y)}, necesitamos [{"cls_name": name, "xy": (x,y), "conf": 1.0}]
+                                    current_keypoints_list = [
+                                        {"cls_name": name, "xy": coords, "conf": 1.0}
+                                        for name, coords in current_keypoints.items()
+                                    ]
+                                    
+                                    # Usar keypoints detectados en este frame específico
+                                    pixel_pos = [(center_x, center_y)]
+                                    field_coords = project_points_by_triangulation(
+                                        pixel_pos,
+                                        current_keypoints_list,  # Lista de keypoints del frame actual
+                                        FIELD_POINTS,
+                                        best_homography_is_flipped,
+                                        min_references=2,
+                                        max_references=4
+                                    )
+                                    
+                                    # Si la proyección es válida, acumular posición de campo
+                                    if field_coords is not None and len(field_coords) > 0:
+                                        field_pos = field_coords[0]
+                                        if not np.isnan(field_pos).any():
+                                            # Inicializar acumulador para este ID si no existe
+                                            if track_id not in player_field_positions_accumulator:
+                                                player_field_positions_accumulator[track_id] = {
+                                                    'team_id': team_id,
+                                                    'field_positions': []
+                                                }
+                                            
+                                            # Acumular posición PROYECTADA (en coordenadas de campo)
+                                            player_field_positions_accumulator[track_id]['field_positions'].append(
+                                                (field_pos[0], field_pos[1])
+                                            )
                     
                     except Exception as e:
                         if frame_idx % 60 == 0:
@@ -808,121 +830,89 @@ class BatchProcessor:
                     player_positions.append(pos_data)
         
         # ====================================================================
-        # PROYECCIÓN DE POSICIONES MEDIAS AL HEATMAP (al final del batch)
-        # MÉTODO: TRIANGULACIÓN GEOMÉTRICA (más preciso que homografía)
+        # ACUMULACIÓN DE POSICIONES MEDIAS EN HEATMAP (al final del batch)
+        # MÉTODO: Media de posiciones proyectadas frame a frame
         # ====================================================================
-        if self.heatmap_accumulator is not None and best_frame_keypoints is not None and player_positions_accumulator:
+        if self.heatmap_accumulator is not None and player_field_positions_accumulator:
             try:
-                # Calcular posición media en píxeles por cada ID
-                player_dets_avg = []
-                pixel_positions_avg = []
-                player_ids_avg = []
+                # Calcular posición media de campo por cada ID (media de posiciones ya proyectadas)
+                valid_players = []
                 
-                for track_id, data in player_positions_accumulator.items():
-                    positions = np.array(data['positions'])
-                    # Posición media en píxeles durante el batch
-                    avg_x = np.mean(positions[:, 0])
-                    avg_y = np.mean(positions[:, 1])
+                for track_id, data in player_field_positions_accumulator.items():
+                    field_positions = np.array(data['field_positions'])
                     
-                    player_dets_avg.append({
+                    # Media de posiciones de campo durante el batch
+                    avg_x_field = np.mean(field_positions[:, 0])
+                    avg_y_field = np.mean(field_positions[:, 1])
+                    
+                    valid_players.append({
                         'team_id': data['team_id'],
-                        'xy': (avg_x, avg_y),
-                        'conf': 0.9
+                        'track_id': track_id,
+                        'xy': (avg_x_field, avg_y_field),
+                        'num_samples': len(field_positions)
                     })
-                    pixel_positions_avg.append((avg_x, avg_y))
-                    player_ids_avg.append(track_id)
                 
-                # PROYECTAR usando TRIANGULACIÓN (más preciso que homografía)
-                if player_dets_avg:
-                    # Proyectar posiciones con triangulación geométrica
-                    field_coords_triangulation = project_points_by_triangulation(
-                        pixel_positions_avg,
-                        best_frame_keypoints,
-                        FIELD_POINTS,
-                        best_homography_is_flipped,
-                        min_references=1,  # Permitir proyección con 1 keypoint para videos difíciles
-                        max_references=4
-                    )
-                    
-                    # Convertir a formato para heatmap (filtrar NaN)
-                    valid_players = []
-                    for i, field_pos in enumerate(field_coords_triangulation):
-                        if not np.isnan(field_pos).any():
-                            valid_players.append({
-                                'team_id': player_dets_avg[i]['team_id'],
-                                'xy': tuple(field_pos),
-                                'conf': 0.9
-                            })
-                    
-                    # Acumular en heatmap
-                    if valid_players:
-                        # Crear posiciones para HeatmapAccumulator (necesita homografía dummy)
-                        # En realidad vamos a modificar para pasar directamente coordenadas de campo
-                        for player in valid_players:
-                            # Agregar directamente al grid del heatmap
-                            team_id = player['team_id']
-                            x_field, y_field = player['xy']
-                            
-                            # Convertir a índices de grid
-                            ix = int(x_field / FIELD_LENGTH * self.heatmap_accumulator.nx)
-                            iy = int(y_field / FIELD_WIDTH * self.heatmap_accumulator.ny)
-                            
-                            # Clipping
-                            ix = np.clip(ix, 0, self.heatmap_accumulator.nx - 1)
-                            iy = np.clip(iy, 0, self.heatmap_accumulator.ny - 1)
-                            
-                            # Acumular
-                            if team_id == 0:
-                                self.heatmap_accumulator.grid_0[iy, ix] += 1
-                                self.heatmap_accumulator.num_frames_0 += 1
-                            elif team_id == 1:
-                                self.heatmap_accumulator.grid_1[iy, ix] += 1
-                                self.heatmap_accumulator.num_frames_1 += 1
+                # Acumular en heatmap
+                if valid_players:
+                    for player in valid_players:
+                        # Agregar directamente al grid del heatmap
+                        team_id = player['team_id']
+                        x_field, y_field = player['xy']
                         
-                        self.heatmap_accumulator.num_frames += 1
+                        # Convertir a índices de grid
+                        ix = int(x_field / FIELD_LENGTH * self.heatmap_accumulator.nx)
+                        iy = int(y_field / FIELD_WIDTH * self.heatmap_accumulator.ny)
+                        
+                        # Clipping
+                        ix = np.clip(ix, 0, self.heatmap_accumulator.nx - 1)
+                        iy = np.clip(iy, 0, self.heatmap_accumulator.ny - 1)
+                        
+                        # Acumular
+                        if team_id == 0:
+                            self.heatmap_accumulator.counts_team0[iy, ix] += 1
+                        elif team_id == 1:
+                            self.heatmap_accumulator.counts_team1[iy, ix] += 1
+                    
+                    # Incrementar contador de frames una sola vez por batch
+                    self.heatmap_accumulator.num_frames += 1
                     
                     # DEBUG: Imprimir posiciones medias del batch cada 200 frames
                     if start_frame_idx % 200 == 0 and len(valid_players) > 0:
                         print(f"\n{'='*70}")
-                        print(f"[Batch {batch_idx}] Posiciones MEDIAS por TRIANGULACIÓN")
+                        print(f"[Heatmap Debug] Posiciones MEDIAS (proyectadas frame a frame)")
                         print(f"  Frames: {start_frame_idx}-{start_frame_idx + len(frames) - 1}")
                         print(f"{'='*70}")
                         print(f"Sistema de referencia:")
                         print(f"  X = Longitudinal (0-{FIELD_LENGTH}m, línea gol izq→der)")
                         print(f"  Y = Lateral (0-{FIELD_WIDTH}m, banda abajo→arriba)")
                         print(f"  Centro campo = ({FIELD_LENGTH/2:.1f}, {FIELD_WIDTH/2:.1f})m")
-                        print(f"  Flip detectado: {best_homography_is_flipped}")
-                        print(f"  Keypoints usados: {len(best_frame_keypoints)}")
-                        print(f"\nJugadores válidos: {len(valid_players)}/{len(player_dets_avg)}")
+                        print(f"\nJugadores válidos: {len(valid_players)}")
                         print(f"{'-'*70}")
                         
-                        for i, field_pos in enumerate(field_coords_triangulation):
-                            if not np.isnan(field_pos).any():
-                                track_id = player_ids_avg[i]
-                                team_name = f"Team {player_dets_avg[i]['team_id']}"
-                                x_field, y_field = field_pos[0], field_pos[1]
-                                x_pixel, y_pixel = pixel_positions_avg[i]
-                                num_frames = len(player_positions_accumulator[track_id]['positions'])
-                                
-                                # Zona aproximada
-                                if x_field < FIELD_LENGTH / 3:
-                                    zone_x = "Defensa"
-                                elif x_field < 2 * FIELD_LENGTH / 3:
-                                    zone_x = "Mediocampo"
-                                else:
-                                    zone_x = "Ataque"
-                                
-                                if y_field < FIELD_WIDTH / 3:
-                                    zone_y = "Derecha"
-                                elif y_field < 2 * FIELD_WIDTH / 3:
-                                    zone_y = "Centro"
-                                else:
-                                    zone_y = "Izquierda"
-                                
-                                print(f"  ID #{track_id} ({team_name}) [{num_frames} frames]:")
-                                print(f"    Píxeles: ({x_pixel:.0f}, {y_pixel:.0f})")
-                                print(f"    Campo: X={x_field:.2f}m, Y={y_field:.2f}m")
-                                print(f"    Zona: {zone_x} - {zone_y}")
+                        for player in valid_players:
+                            track_id = player['track_id']
+                            team_name = f"Team {player['team_id']}"
+                            x_field, y_field = player['xy']
+                            num_samples = player['num_samples']
+                            
+                            # Zona aproximada
+                            if x_field < FIELD_LENGTH / 3:
+                                zone_x = "Defensa"
+                            elif x_field < 2 * FIELD_LENGTH / 3:
+                                zone_x = "Mediocampo"
+                            else:
+                                zone_x = "Ataque"
+                            
+                            if y_field < FIELD_WIDTH / 3:
+                                zone_y = "Derecha"
+                            elif y_field < 2 * FIELD_WIDTH / 3:
+                                zone_y = "Centro"
+                            else:
+                                zone_y = "Izquierda"
+                            
+                            print(f"  ID #{track_id} ({team_name}) [Media de {num_samples} frames proyectados]:")
+                            print(f"    Campo: X={x_field:.2f}m, Y={y_field:.2f}m")
+                            print(f"    Zona: {zone_x} - {zone_y}")
                         
                         print(f"{'='*70}\n")
             

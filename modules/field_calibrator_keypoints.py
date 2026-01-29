@@ -116,7 +116,7 @@ class FieldCalibratorKeypoints:
         )
         
         if H is None:
-            print("⚠ cv2.findHomography falló (retornó None)")
+            # Silenciar warning, es normal cuando hay pocos keypoints
             return False
         
         # 4. Validar calidad de la homografía
@@ -124,7 +124,7 @@ class FieldCalibratorKeypoints:
         inlier_ratio = num_inliers / len(pts_img) if len(pts_img) > 0 else 0
         
         if num_inliers < self.min_keypoints:
-            print(f"⚠ Pocos inliers: {num_inliers}/{len(pts_img)} ({inlier_ratio:.1%})")
+            # Silenciar warning, es normal durante la fase inicial
             return False
         
         # 5. Calcular error de reproyección

@@ -304,13 +304,19 @@ function handleWebSocketMessage(data) {
         document.getElementById('progress-text').textContent = data.message;
     } else if (data.type === 'progress') {
         updateProgress(data);
+        // Iniciar actualizaciones de heatmap cuando comienza el análisis
+        if (!heatmapUpdateInterval && currentSessionId) {
+            startHeatmapUpdates();
+        }
     } else if (data.type === 'frame') {
         updateVideoFrame(data);
     } else if (data.type === 'batch_complete') {
         updateBatchComplete(data);
     } else if (data.type === 'completed') {
+        stopHeatmapUpdates();
         showResults(data.stats);
     } else if (data.type === 'error') {
+        stopHeatmapUpdates();
         showError(data.message);
     }
 }
@@ -845,6 +851,8 @@ function updateSpatialStats(spatial) {
 }
 
 // Actualizar imágenes de heatmaps
+let heatmapUpdateInterval = null;
+
 function updateHeatmapImages() {
     if (!currentSessionId) {
         console.warn('No hay currentSessionId para actualizar heatmaps');
@@ -871,6 +879,25 @@ function updateHeatmapImages() {
         heatmapTeam1.src = url;
     } else {
         console.error('No se encontró elemento heatmap-team-1');
+    }
+}
+
+// Iniciar actualizaciones periódicas de heatmaps
+function startHeatmapUpdates() {
+    if (heatmapUpdateInterval) {
+        clearInterval(heatmapUpdateInterval);
+    }
+    // Actualizar cada 3 segundos durante el análisis
+    heatmapUpdateInterval = setInterval(updateHeatmapImages, 3000);
+    console.log('Iniciado actualización periódica de heatmaps cada 3 segundos');
+}
+
+// Detener actualizaciones periódicas
+function stopHeatmapUpdates() {
+    if (heatmapUpdateInterval) {
+        clearInterval(heatmapUpdateInterval);
+        heatmapUpdateInterval = null;
+        console.log('Detenidas actualizaciones periódicas de heatmaps');
     }
 }
 

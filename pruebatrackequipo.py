@@ -247,7 +247,6 @@ def main():
     is_flipped = False
     last_valid_keypoints = None  # Persistir últimos keypoints válidos
     last_valid_flip = False  # Persistir última orientación válida
-    accumulated_kp_for_triangulation = {}  # Acumular keypoints detectados a lo largo de frames
     last_triangulation_update_frame = 0
     
     # Inicializar sistema de calibración
@@ -318,41 +317,22 @@ def main():
             if frame_no % 3 == 0:  # Cada 3 frames para balance entre precisión y velocidad
                 current_keypoints = keypoints_detector.detect_keypoints(frame)
                 
-                # Acumular keypoints detectados para triangulación
-                # Mantener ventana móvil de últimos 150 frames (~5 segundos a 30fps)
-                MAX_KP_AGE = 150
-                for name, coords in current_keypoints.items():
-                    accumulated_kp_for_triangulation[name] = {
-                        'xy': coords,
-                        'frame': frame_no
-                    }
-                
-                # Limpiar keypoints antiguos
-                accumulated_kp_for_triangulation = {
-                    name: data for name, data in accumulated_kp_for_triangulation.items()
-                    if frame_no - data['frame'] <= MAX_KP_AGE
-                }
-                
-                # Convertir keypoints acumulados a formato lista para triangulación
+                # Convertir keypoints del frame actual a formato lista para triangulación
+                # NO acumular entre frames para evitar problemas con cambios de cámara
                 current_frame_keypoints_list = [
-                    {"cls_name": name, "xy": data['xy'], "conf": 0.9}
-                    for name, data in accumulated_kp_for_triangulation.items()
+                    {"cls_name": name, "xy": coords, "conf": 0.9}
+                    for name, coords in current_keypoints.items()
                 ]
                 
                 # DEBUG: Mostrar cuando se detectan keypoints
                 if current_keypoints:
-                    kp_freshness = {
-                        name: f"{'🆕' if frame_no - data['frame'] == 0 else f'🕐{frame_no - data['frame']}f'}"
-                        for name, data in accumulated_kp_for_triangulation.items()
-                    }
                     if frame_no <= 100 or len(current_frame_keypoints_list) >= 3:
                         # Mostrar coordenadas de keypoints detectados
                         kp_coords_debug = {}
-                        for name, data in accumulated_kp_for_triangulation.items():
-                            x_px, y_px = data['xy']
+                        for name, coords in current_keypoints.items():
+                            x_px, y_px = coords
                             kp_coords_debug[name] = f"({x_px:.0f},{y_px:.0f})"
-                        print(f"[DEBUG Frame {frame_no}] KPs frescos: {list(current_keypoints.keys())} | "
-                              f"Total acumulados: {len(current_frame_keypoints_list)}")
+                        print(f"[DEBUG Frame {frame_no}] KPs detectados: {list(current_keypoints.keys())} ({len(current_frame_keypoints_list)} total)")
                         if len(current_frame_keypoints_list) >= 1:
                             print(f"  Píxeles detectados: {kp_coords_debug}")
                 
