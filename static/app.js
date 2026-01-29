@@ -572,6 +572,8 @@ function updateLiveStats(stats) {
 
 // Mostrar resultados finales
 function showResults(stats) {
+    console.log('Mostrando resultados finales:', stats);
+    
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'block';
     
@@ -580,6 +582,18 @@ function showResults(stats) {
     document.getElementById('total-frames-stat').textContent = stats.total_frames;
     document.getElementById('possession-stat-0').textContent = (stats.possession_percent[0] || 0).toFixed(1) + '%';
     document.getElementById('possession-stat-1').textContent = (stats.possession_percent[1] || 0).toFixed(1) + '%';
+    
+    // Mostrar botón de resumen de heatmaps
+    const summaryBtnContainer = document.getElementById('heatmap-summary-btn-container');
+    if (summaryBtnContainer) {
+        summaryBtnContainer.style.display = 'block';
+    }
+    
+    // Actualizar estadísticas espaciales finales si están disponibles
+    if (stats.spatial) {
+        console.log('Stats espaciales finales:', stats.spatial);
+        updateSpatialStats(stats.spatial);
+    }
     
     // Posesión
     const p0 = stats.possession_percent[0] || 0;
@@ -621,6 +635,16 @@ function showResults(stats) {
     // Timeline
     if (stats.timeline) {
         updateTimelineChart(stats.timeline, stats.total_frames);
+    }
+    
+    // IMPORTANTE: Actualizar heatmaps cuando el análisis termina
+    // Esperar un momento para que los archivos se guarden
+    if (currentSessionId) {
+        console.log('Programando carga de heatmaps finales...');
+        setTimeout(() => {
+            console.log('Cargando heatmaps finales...');
+            updateHeatmapImages();
+        }, 1000);
     }
 }
 
@@ -885,4 +909,26 @@ function updateTopZones(teamId, zonePercentages) {
             ).join('');
         }
     }
+}
+
+// Función para mostrar el resumen de heatmaps
+function showHeatmapSummary() {
+    if (!currentSessionId) {
+        console.error('No session ID available');
+        return;
+    }
+    
+    const summaryUrl = `/api/heatmap-summary/${currentSessionId}?t=${Date.now()}`;
+    const summaryImg = document.getElementById('heatmap-summary-image');
+    const downloadBtn = document.getElementById('download-summary-btn');
+    
+    // Actualizar imagen
+    summaryImg.src = summaryUrl;
+    
+    // Actualizar botón de descarga
+    downloadBtn.href = summaryUrl;
+    
+    // Mostrar modal
+    const modal = new bootstrap.Modal(document.getElementById('heatmapSummaryModal'));
+    modal.show();
 }

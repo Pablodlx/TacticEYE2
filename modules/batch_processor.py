@@ -20,9 +20,46 @@ from modules.possession_tracker_v2 import PossessionTrackerV2
 from modules.match_state import MatchState, TrackerState, TeamClassifierState, PossessionState
 
 # Imports de módulos de calibración y tracking espacial
-from modules.field_calibration import FieldCalibrator
-from modules.field_model import FieldModel, ZoneModel
+from modules.field_keypoints_yolo import FieldKeypointsYOLO
+from modules.field_model_keypoints import FieldModel as FieldModelKeypoints
+from modules.field_calibrator_keypoints import FieldCalibratorKeypoints
+from modules.field_model import FieldModel, FieldDimensions, ZoneModel
 from modules.spatial_possession_tracker import SpatialPossessionTracker
+
+# Jerarquía de prioridad de keypoints (mayor = más fiable)
+# Basada en las 15 clases del modelo field_kp_merged_fast
+KEYPOINT_PRIORITY = {
+    # Intersecciones de línea central (prioridad máxima)
+    'midline_top_intersection': 100,
+    'midline_bottom_intersection': 100,
+    
+    # Círculo central (muy fiables)
+    'halfcircle_top': 95,
+    'halfcircle_bottom': 95,
+    
+    # Intersecciones arco-área (arcos de penalti)
+    'top_arc_area_intersection': 90,
+    'bottom_arc_area_intersection': 90,
+    
+    # Área grande (big box) - partes internas
+    'bigarea_top_inner': 80,
+    'bigarea_bottom_inner': 80,
+    
+    # Área grande (big box) - partes externas
+    'bigarea_top_outter': 75,
+    'bigarea_bottom_outter': 75,
+    
+    # Área pequeña (small box) - partes internas
+    'smallarea_top_inner': 70,
+    'smallarea_bottom_inner': 70,
+    
+    # Área pequeña (small box) - partes externas
+    'smallarea_top_outter': 65,
+    'smallarea_bottom_outter': 65,
+    
+    # Esquinas (menor prioridad por oclusión frecuente)
+    'corner': 40,
+}
 
 
 @dataclass
@@ -185,21 +222,52 @@ class BatchProcessor:
         
         # 4. Calibración de campo y tracking espacial
         if self.enable_spatial_tracking:
-            print("✓ Inicializando calibración automática de campo...")
+            print("✓ Inicializando calibración automática de campo (YOLO Custom)...")
             
-            # Inicializar calibrador
-            self.field_calibrator = FieldCalibrator(
-                use_temporal_filter=True,
-                min_confidence=0.5
-            )
+            # Detector de keypoints con modelo YOLO custom
+            try:
+                self.keypoints_detector = FieldKeypointsYOLO(
+                    model_path="weights/field_kp_merged_fast/weights/best.pt",
+                    confidence_threshold=0.25,
+                    device="cuda" if torch.cuda.is_available() else "cpu"
+                )
+                self.use_keypoints = True
+                print("  ✓ Detector YOLO custom inicializado")
+            except Exception as e:
+                print(f"  ⚠ Error inicializando detector YOLO: {e}")
+                self.keypoints_detector = None
+                self.use_keypoints = False
+            
+            # Modelo de campo para keypoints
+            if self.use_keypoints:
+                self.field_model_keypoints = FieldModelKeypoints(
+                    field_length=105.0,
+                    field_width=68.0,
+                    use_normalized=False
+                )
+                self.field_calibrator_keypoints = FieldCalibratorKeypoints(
+                    field_model=self.field_model_keypoints,
+                    min_keypoints=4,
+                    ransac_threshold=5.0,
+                    confidence=0.99
+                )
+            else:
+                self.field_calibrator_keypoints = None
+            
+            # FieldModel básico para ZoneModel
+            field_dims = FieldDimensions(length=105.0, width=68.0)
+            basic_field_model = FieldModel(dimensions=field_dims)
             
             # Inicializar modelo de zonas
             zone_model = ZoneModel(
-                field_model=self.field_calibrator.field_model,
+                field_model=basic_field_model,
                 partition_type=self.spatial_params['zone_partition_type'],
                 nx=self.spatial_params['zone_nx'],
                 ny=self.spatial_params['zone_ny']
             )
+            
+            # Usar el calibrador de keypoints como principal
+            self.field_calibrator = self.field_calibrator_keypoints
             
             # Inicializar tracker espacial
             self.spatial_tracker = SpatialPossessionTracker(
@@ -209,12 +277,17 @@ class BatchProcessor:
                 heatmap_resolution=self.spatial_params['heatmap_resolution']
             )
             
+            print(f"  - Modo: Keypoints acumulativos (YOLO Custom Model)")
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
         else:
+            self.keypoints_detector = None
+            self.field_model_keypoints = None
             self.field_calibrator = None
+            self.field_calibrator_keypoints = None
             self.spatial_tracker = None
+            self.use_keypoints = False
     
     def save_modules_state(self, match_state: MatchState):
         """
@@ -259,14 +332,15 @@ class BatchProcessor:
         match_state.possession_state.passes_by_team = self.possession_tracker.passes_by_team.copy()
         match_state.possession_state.last_frame_idx = match_state.total_frames_processed
     
-    def _create_annotated_frame(self, frame: np.ndarray, tracked_objects: list, frame_idx: int) -> np.ndarray:
+    def _create_annotated_frame(self, frame: np.ndarray, tracked_objects: list, frame_idx: int, keypoints: dict = None) -> np.ndarray:
         """
-        Crea un frame anotado con cajas de detección y labels.
+        Crea un frame anotado con cajas de detección, labels y keypoints.
         
         Args:
             frame: Frame BGR
             tracked_objects: Lista de objetos detectados
             frame_idx: Número de frame
+            keypoints: Diccionario de keypoints detectados {nombre: (x, y)}
             
         Returns:
             Frame anotado
@@ -322,6 +396,51 @@ class BatchProcessor:
             cv2.rectangle(frame, (x1, y1 - text_height - 5), (x1 + text_width, y1), color, -1)
             cv2.putText(frame, label, (x1, y1 - 5), font, font_scale, (0, 0, 0), thickness)
         
+        # Visualizar keypoints detectados con bounding boxes
+        if keypoints:
+            keypoint_box_size = 15
+            
+            for kp_name, (kp_x, kp_y) in keypoints.items():
+                # Obtener prioridad del keypoint
+                priority = KEYPOINT_PRIORITY.get(kp_name, 50)
+                
+                # Color según prioridad
+                if priority >= 90:  # ALTA
+                    kp_color = (0, 255, 255)  # Amarillo
+                elif priority >= 75:  # Media-Alta
+                    kp_color = (0, 200, 255)  # Naranja
+                elif priority >= 65:  # Media
+                    kp_color = (255, 150, 0)  # Azul claro
+                else:  # Baja
+                    kp_color = (180, 180, 180)  # Gris
+                
+                # Dibujar bounding box
+                x1 = int(kp_x - keypoint_box_size)
+                y1 = int(kp_y - keypoint_box_size)
+                x2 = int(kp_x + keypoint_box_size)
+                y2 = int(kp_y + keypoint_box_size)
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), kp_color, 2)
+                
+                # Label del keypoint
+                kp_label = kp_name.replace('_', ' ').title()
+                if len(kp_label) > 20:
+                    parts = kp_label.split()
+                    if len(parts) > 2:
+                        kp_label = f"{parts[0][0]}{parts[1][0]}{parts[-1][:3]}"
+                
+                # Fondo para el texto
+                label_size = cv2.getTextSize(kp_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                cv2.rectangle(frame, (x1, y1 - 18), (x1 + label_size[0] + 4, y1 - 2),
+                             kp_color, -1)
+                
+                # Texto
+                cv2.putText(frame, kp_label, (x1 + 2, y1 - 6),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+                
+                # Punto central
+                cv2.circle(frame, (int(kp_x), int(kp_y)), 3, (255, 255, 255), -1)
+        
         # Añadir info del frame en la esquina
         info_text = f"Frame: {frame_idx}"
         cv2.putText(frame, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
@@ -372,6 +491,7 @@ class BatchProcessor:
         events = []
         
         # Procesar cada frame del chunk
+        current_keypoints = None
         for i, frame in enumerate(frames):
             frame_idx = start_frame_idx + i
             
@@ -436,9 +556,19 @@ class BatchProcessor:
                     # Referee o ball
                     obj['team_id'] = -1
             
-            # Enviar frame original (sin anotaciones) periódicamente
+            # 3.5. DETECCIÓN DE KEYPOINTS (antes de visualización)
+            if self.use_keypoints and self.keypoints_detector is not None and frame_idx % 3 == 0:
+                try:
+                    current_keypoints = self.keypoints_detector.detect_keypoints(frame)
+                except Exception as e:
+                    if frame_idx % 60 == 0:
+                        print(f"[Keypoints] Error frame {frame_idx}: {e}")
+                    current_keypoints = None
+            
+            # Enviar frame anotado periódicamente
             if send_visualization and (i % visualize_interval == 0 or i == len(frames) - 1):
-                send_visualization(frame, frame_idx)
+                annotated_frame = self._create_annotated_frame(frame.copy(), tracked_objects, frame_idx, current_keypoints)
+                send_visualization(annotated_frame, frame_idx)
             
             # 4. DETECCIÓN DE POSESIÓN
             ball_owner_team = -1
@@ -492,17 +622,37 @@ class BatchProcessor:
             # 4.5. TRACKING ESPACIAL (si está habilitado)
             spatial_info = {}
             if self.enable_spatial_tracking and self.spatial_tracker is not None:
-                # Calibrar frecuentemente al inicio, luego espaciadamente
-                should_calibrate = (
-                    (start_frame_idx + i) < 300 or  # Primeros 300 frames: siempre
-                    (i % 30 == 0)                    # Después: cada 30 frames
-                )
+                # Calibrar menos frecuentemente
+                # Calibración con keypoints acumulativos
+                # Usar keypoints ya detectados si existen
+                if self.use_keypoints and self.keypoints_detector is not None and current_keypoints is not None:
+                    try:
+                        # Siempre intentar acumular keypoints (aunque sean 0)
+                        success = self.field_calibrator_keypoints.estimate_homography(current_keypoints)
+                        
+                        # Log solo cada 30 frames para no saturar
+                        if frame_idx % 30 == 0:
+                            num_detected = len(current_keypoints)
+                            num_accumulated = len(self.field_calibrator_keypoints.accumulated_keypoints)
+                            
+                            if success:
+                                info = self.field_calibrator_keypoints.get_calibration_info()
+                                print(f"[Calibración] ✓ Frame {frame_idx}: {num_detected} detectados, "
+                                      f"{num_accumulated} acumulados, calibrado con {info['num_keypoints']} keypoints "
+                                      f"(error={info['reprojection_error']:.2f}px)")
+                            else:
+                                print(f"[Calibración] ⏳ Frame {frame_idx}: {num_detected} detectados, "
+                                      f"{num_accumulated} acumulados (necesita {self.field_calibrator_keypoints.min_keypoints} para calibrar)")
+                            
+                    except Exception as e:
+                        if frame_idx % 60 == 0:
+                            print(f"[Calibración] ✗ Frame {frame_idx}: {e}")
                 
-                # Actualizar tracker espacial con la posición del poseedor
+                # Actualizar tracker espacial
                 spatial_state = self.spatial_tracker.update(
                     ball_pos=ball_bbox[:2] if ball_bbox is not None else None,
                     players=tracked_objects,
-                    frame=frame if should_calibrate else None
+                    frame=None  # Ya no pasamos frame aquí, calibramos arriba
                 )
                 
                 spatial_info = {
@@ -773,6 +923,29 @@ def export_spatial_heatmaps(processor: BatchProcessor,
         print("⚠ Tracking espacial no está habilitado")
         return False
     
+    # Debug: Estado del TeamClassifier antes de exportar heatmaps
+    if processor.team_classifier:
+        tc = processor.team_classifier
+        print(f"\n[TeamClassifier DEBUG]")
+        print(f"  KMeans initialized: {tc.kmeans_initialized}")
+        print(f"  Total tracks: {len(tc.track_team)}")
+        
+        # Contar cuántos jugadores por equipo
+        team_counts = {-1: 0, 0: 0, 1: 0}
+        for tid, team_id in tc.track_team.items():
+            team_counts[team_id] = team_counts.get(team_id, 0) + 1
+        
+        print(f"  Distribución de equipos:")
+        print(f"    Team -1 (referee/unknown): {team_counts.get(-1, 0)} jugadores")
+        print(f"    Team 0: {team_counts.get(0, 0)} jugadores")
+        print(f"    Team 1: {team_counts.get(1, 0)} jugadores")
+        
+        if tc.kmeans_initialized:
+            print(f"  Cluster centers:")
+            for i, center in enumerate(tc.cluster_centers):
+                team = tc.cluster_to_team.get(i, -1)
+                print(f"    Cluster {i} (Team {team}): {center}")
+    
     # Exportar heatmaps
     heatmap_0 = processor.spatial_tracker.export_heatmap(team_id=0, normalize=True)
     heatmap_1 = processor.spatial_tracker.export_heatmap(team_id=1, normalize=True)
@@ -780,6 +953,10 @@ def export_spatial_heatmaps(processor: BatchProcessor,
     if heatmap_0 is None or heatmap_1 is None:
         print("⚠ No se generaron heatmaps (heatmaps deshabilitados)")
         return False
+    
+    # Logging para debug
+    print(f"[Heatmaps] Team 0: shape={heatmap_0.shape}, sum={heatmap_0.sum():.2f}, max={heatmap_0.max():.2f}")
+    print(f"[Heatmaps] Team 1: shape={heatmap_1.shape}, sum={heatmap_1.sum():.2f}, max={heatmap_1.max():.2f}")
     
     # Obtener estadísticas espaciales
     spatial_stats = processor.spatial_tracker.get_spatial_statistics()

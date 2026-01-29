@@ -234,6 +234,13 @@ def run_match_analysis(
                     print(f"  ✓ Eventos: {chunk_output.chunk_stats['events_count']}")
                     print(f"  ✓ Posesión: Team {chunk_output.chunk_stats['possession_team']}")
                     
+                    # Exportar heatmaps después de cada batch (para visualización en tiempo real)
+                    if processor.enable_spatial_tracking and processor.spatial_tracker is not None:
+                        import os
+                        heatmap_path = os.path.join(config.output_dir, f"{match_id}_heatmaps.npz")
+                        from modules.batch_processor import export_spatial_heatmaps
+                        export_spatial_heatmaps(processor, heatmap_path)
+                    
                     # Callback de progreso
                     if config.on_progress:
                         config.on_progress(
@@ -294,8 +301,20 @@ def run_match_analysis(
                 print()
                 print("ESTADÍSTICAS ESPACIALES:")
                 
-                if processor.field_calibrator.has_valid_calibration():
-                    print("  ✓ Calibración de campo: VÁLIDA")
+                # Verificar si hubo calibración válida durante el análisis
+                calibration_was_valid = processor.field_calibrator.has_valid_calibration()
+                
+                # Verificar si los heatmaps tienen datos
+                has_heatmap_data = False
+                if processor.spatial_tracker.heatmaps is not None:
+                    has_heatmap_data = any(
+                        h.sum() > 0 for h in processor.spatial_tracker.heatmaps.values()
+                    )
+                
+                if calibration_was_valid:
+                    print("  ✓ Calibración de campo: VÁLIDA (actualmente)")
+                elif has_heatmap_data:
+                    print("  ✓ Calibración de campo: Datos acumulados (calibración temporal)")
                 else:
                     print("  ⚠ Calibración de campo: NO DISPONIBLE")
                 
@@ -306,6 +325,7 @@ def run_match_analysis(
                 from modules.batch_processor import export_spatial_heatmaps
                 if export_spatial_heatmaps(processor, heatmap_path):
                     print(f"  ✓ Heatmaps exportados: {heatmap_path}")
+
                 
                 # Obtener y mostrar estadísticas por zona
                 zone_stats = processor.spatial_tracker.get_zone_statistics()

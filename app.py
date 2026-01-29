@@ -219,51 +219,491 @@ async def get_status(session_id: str):
     })
 
 
-@app.get("/api/heatmap/{session_id}/{team_id}")
-async def get_heatmap(session_id: str, team_id: int):
-    """Obtener heatmap de un equipo como imagen PNG"""
+async def generate_keypoints_heatmap(data_file, team_id: int, session_id: str):
+    """Genera heatmap desde datos de keypoints (nuevo sistema)"""
     import io
-    from PIL import Image
+    import json
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle, Circle, Arc
     from matplotlib import cm
+    from scipy.ndimage import gaussian_filter
+    import logging
+    
+    logger = logging.getLogger(__name__)
     
     try:
-        # Buscar archivo de heatmaps
-        heatmap_path = OUTPUT_DIR / f"{session_id}_heatmaps.npz"
+        # Cargar datos JSON
+        with open(data_file, 'r') as f:
+            data = json.load(f)
         
-        if not heatmap_path.exists():
-            # Buscar en subdirectorio
-            heatmap_path = OUTPUT_DIR / session_id / f"{session_id}_heatmaps.npz"
+        team_data = data.get(f'team_{team_id}', [])
         
-        if not heatmap_path.exists():
-            return JSONResponse({"success": False, "error": "Heatmap no encontrado"}, status_code=404)
+        if not team_data:
+            logger.warning(f"No hay datos para team {team_id}")
+            return JSONResponse({"success": False, "error": f"No hay datos para team {team_id}"}, status_code=404)
         
-        # Cargar heatmap
-        data = np.load(str(heatmap_path))
-        heatmap = data[f'team_{team_id}_heatmap']
+        # Extraer posiciones
+        xs = [p['position'][0] for p in team_data]
+        ys = [p['position'][1] for p in team_data]
         
-        # Aplicar colormap
-        if team_id == 0:
-            colored = cm.Greens(heatmap)
+        # Crear heatmap 2D
+        heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=50, 
+                                                  range=[[0, 105], [0, 68]])
+        
+        # Suavizar
+        heatmap_smooth = gaussian_filter(heatmap.T, sigma=2)
+        
+        # Normalizar
+        if heatmap_smooth.max() > 0:
+            heatmap_norm = heatmap_smooth / heatmap_smooth.max()
         else:
-            colored = cm.Reds(heatmap)
+            heatmap_norm = heatmap_smooth
         
-        # Convertir a imagen
-        img_array = (colored[:,:,:3] * 255).astype(np.uint8)
-        img = Image.fromarray(img_array)
+        # Crear figura
+        fig, ax = plt.subplots(1, 1, figsize=(10.5, 6.8), facecolor='#1a1a1a')
+        ax.set_facecolor('#2d5016')
         
-        # Redimensionar para visualización (mantener aspect ratio del campo)
-        img = img.resize((525, 340), Image.BILINEAR)
+        # Dibujar campo de fútbol (105m x 68m)
+        field_color = 'white'
+        lw = 2
         
-        # Guardar en buffer
+        # Bordes
+        ax.add_patch(Rectangle((0, 0), 105, 68, fill=False, edgecolor=field_color, linewidth=lw))
+        
+        # Línea media
+        ax.plot([52.5, 52.5], [0, 68], color=field_color, linewidth=lw)
+        
+        # Círculo central
+        center_circle = Circle((52.5, 34), 9.15, fill=False, edgecolor=field_color, linewidth=lw)
+        ax.add_patch(center_circle)
+        ax.plot(52.5, 34, 'o', color=field_color, markersize=4)
+        
+        # Áreas grandes
+        ax.add_patch(Rectangle((0, 34-20.16), 16.5, 40.32, fill=False, edgecolor=field_color, linewidth=lw))
+        ax.add_patch(Rectangle((105-16.5, 34-20.16), 16.5, 40.32, fill=False, edgecolor=field_color, linewidth=lw))
+        
+        # Áreas pequeñas
+        ax.add_patch(Rectangle((0, 34-9.16), 5.5, 18.32, fill=False, edgecolor=field_color, linewidth=lw))
+        ax.add_patch(Rectangle((105-5.5, 34-9.16), 5.5, 18.32, fill=False, edgecolor=field_color, linewidth=lw))
+        
+        # Arcos de penalty
+        left_arc = Arc((11, 34), 18.3, 18.3, angle=0, theta1=308, theta2=52, edgecolor=field_color, linewidth=lw)
+        right_arc = Arc((94, 34), 18.3, 18.3, angle=0, theta1=128, theta2=232, edgecolor=field_color, linewidth=lw)
+        ax.add_patch(left_arc)
+        ax.add_patch(right_arc)
+        
+        # Puntos de penalty
+        ax.plot(11, 34, 'o', color=field_color, markersize=4)
+        ax.plot(94, 34, 'o', color=field_color, markersize=4)
+        
+        # Heatmap
+        cmap = cm.Greens if team_id == 0 else cm.Reds
+        title_color = '#4ade80' if team_id == 0 else '#f87171'
+        
+        extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+        ax.imshow(heatmap_norm, extent=extent, origin='lower', 
+                 cmap=cmap, alpha=0.6, interpolation='bilinear')
+        
+        # Título
+        ax.set_title(f'Team {team_id} Heatmap - Basado en Keypoints\n({len(team_data)} posiciones)',
+                    fontsize=16, fontweight='bold', color=title_color, pad=20)
+        
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 68)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        
+        # Guardar
         buf = io.BytesIO()
-        img.save(buf, format='PNG')
+        plt.savefig(buf, format='PNG', dpi=80, bbox_inches='tight',
+                   facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
         buf.seek(0)
+        
+        logger.info(f"Heatmap de keypoints generado para team {team_id} ({len(team_data)} posiciones)")
         
         from fastapi.responses import StreamingResponse
         return StreamingResponse(buf, media_type="image/png")
         
     except Exception as e:
-        print(f"Error al generar heatmap: {e}")
+        logger.error(f"Error generando heatmap de keypoints: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/heatmap/{session_id}/{team_id}")
+async def get_heatmap(session_id: str, team_id: int):
+    """Obtener heatmap de un equipo como imagen PNG (sistema clásico o keypoints)"""
+    import io
+    from PIL import Image
+    from matplotlib import cm
+    import logging
+    import json
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # OPCIÓN 1: Buscar heatmap basado en keypoints (nuevo sistema)
+        keypoints_paths = [
+            BASE_DIR / "outputs_heatmap" / f"heatmap_data_{session_id}.json",
+            BASE_DIR / "outputs_heatmap" / f"{session_id}_keypoints.json",
+        ]
+        
+        # Buscar todos los archivos JSON en outputs_heatmap
+        heatmap_dir = BASE_DIR / "outputs_heatmap"
+        if heatmap_dir.exists():
+            json_files = sorted(heatmap_dir.glob("heatmap_data_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if json_files:
+                keypoints_paths.insert(0, json_files[0])  # Usar el más reciente
+        
+        keypoints_heatmap_path = None
+        for path in keypoints_paths:
+            if path.exists():
+                keypoints_heatmap_path = path
+                logger.info(f"✓ Heatmap de keypoints encontrado: {path}")
+                break
+        
+        if keypoints_heatmap_path:
+            # Usar sistema de keypoints
+            return await generate_keypoints_heatmap(keypoints_heatmap_path, team_id, session_id)
+        
+        # OPCIÓN 2: Buscar heatmap clásico (.npz)
+        search_paths = [
+            BASE_DIR / "outputs_streaming" / f"{session_id}_heatmaps.npz",
+            OUTPUT_DIR / f"{session_id}_heatmaps.npz",
+            OUTPUT_DIR / session_id / f"{session_id}_heatmaps.npz",
+        ]
+        
+        heatmap_path = None
+        for path in search_paths:
+            logger.info(f"Buscando heatmap en: {path}")
+            if path.exists():
+                heatmap_path = path
+                logger.info(f"✓ Heatmap encontrado en: {path}")
+                break
+        
+        if heatmap_path is None:
+            logger.warning(f"Heatmap no encontrado para session {session_id}, team {team_id}. Rutas buscadas: {search_paths}")
+            return JSONResponse({"success": False, "error": "Heatmap no encontrado"}, status_code=404)
+        
+        # Cargar heatmap
+        logger.info(f"Cargando heatmap desde: {heatmap_path}")
+        data = np.load(str(heatmap_path), allow_pickle=True)
+        
+        # Verificar que la clave existe
+        heatmap_key = f'team_{team_id}_heatmap'
+        if heatmap_key not in data:
+            logger.error(f"Clave {heatmap_key} no encontrada. Claves disponibles: {list(data.keys())}")
+            return JSONResponse({"success": False, "error": f"Heatmap para team {team_id} no encontrado"}, status_code=404)
+        
+        heatmap = data[heatmap_key]
+        logger.info(f"Heatmap cargado para team {team_id}, shape: {heatmap.shape}, sum={heatmap.sum():.2f}")
+        
+        # Validar que haya datos
+        if heatmap.sum() == 0:
+            logger.warning(f"Heatmap para team {team_id} está vacío (sum=0). Generando imagen de advertencia.")
+        
+        # Normalizar heatmap para mejor visualización
+        if heatmap.max() > 0:
+            heatmap_norm = heatmap / heatmap.max()
+        else:
+            heatmap_norm = heatmap
+        
+        # Crear figura con matplotlib para mejor visualización
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+        
+        fig, ax = plt.subplots(1, 1, figsize=(10.5, 6.8), facecolor='#1a1a1a')
+        ax.set_facecolor('#2d5016')  # Verde campo
+        
+        # Dibujar campo de fútbol
+        # Líneas blancas del campo
+        field_color = 'white'
+        field_lw = 2
+        
+        # Borde del campo
+        ax.plot([0, 1], [0, 0], color=field_color, linewidth=field_lw)
+        ax.plot([1, 1], [0, 1], color=field_color, linewidth=field_lw)
+        ax.plot([1, 0], [1, 1], color=field_color, linewidth=field_lw)
+        ax.plot([0, 0], [1, 0], color=field_color, linewidth=field_lw)
+        
+        # Línea central
+        ax.plot([0.5, 0.5], [0, 1], color=field_color, linewidth=field_lw)
+        
+        # Círculo central
+        circle = plt.Circle((0.5, 0.5), 0.087, color=field_color, fill=False, linewidth=field_lw)
+        ax.add_patch(circle)
+        ax.plot(0.5, 0.5, 'o', color=field_color, markersize=4)
+        
+        # Áreas
+        # Área izquierda
+        ax.plot([0, 0.157], [0.296, 0.296], color=field_color, linewidth=field_lw)
+        ax.plot([0.157, 0.157], [0.296, 0.704], color=field_color, linewidth=field_lw)
+        ax.plot([0.157, 0], [0.704, 0.704], color=field_color, linewidth=field_lw)
+        
+        # Área derecha
+        ax.plot([1, 0.843], [0.296, 0.296], color=field_color, linewidth=field_lw)
+        ax.plot([0.843, 0.843], [0.296, 0.704], color=field_color, linewidth=field_lw)
+        ax.plot([0.843, 1], [0.704, 0.704], color=field_color, linewidth=field_lw)
+        
+        # Superponer heatmap con transparencia
+        if team_id == 0:
+            cmap = cm.Greens
+            title_color = '#4ade80'
+        else:
+            cmap = cm.Reds
+            title_color = '#f87171'
+        
+        # Flip verticalmente para que coincida con orientación del campo
+        heatmap_display = np.flipud(heatmap_norm)
+        
+        im = ax.imshow(heatmap_display, extent=[0, 1, 0, 1], cmap=cmap, 
+                      alpha=0.7, interpolation='bilinear', origin='lower')
+        
+        # Título con información clara
+        team_name = f"Team {team_id}"
+        if heatmap.sum() == 0:
+            title_text = f'{team_name} Heatmap - SIN DATOS (clasificación pendiente)'
+            title_color = 'gray'
+        else:
+            title_text = f'{team_name} Heatmap (intensidad: {heatmap.sum():.1f})'
+        
+        ax.set_title(title_text, fontsize=16, fontweight='bold', color=title_color, pad=20)
+        
+        # Quitar ejes
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_aspect('equal')
+        ax.axis('off')
+        
+        # Guardar en buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='PNG', dpi=80, bbox_inches='tight', 
+                   facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
+        buf.seek(0)
+        
+        logger.info(f"Heatmap generado exitosamente para session {session_id}, team {team_id}")
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="image/png")
+        
+    except Exception as e:
+        logger.error(f"Error al generar heatmap: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/heatmap-summary/{session_id}")
+async def get_heatmap_summary(session_id: str):
+    """Obtener resumen con ambos heatmaps lado a lado (soporta keypoints y clásico)"""
+    import io
+    import json
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+    from matplotlib.patches import Rectangle, Circle, Arc
+    from scipy.ndimage import gaussian_filter
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # OPCIÓN 1: Buscar heatmap basado en keypoints
+        heatmap_dir = BASE_DIR / "outputs_heatmap"
+        keypoints_heatmap_path = None
+        
+        if heatmap_dir.exists():
+            json_files = sorted(heatmap_dir.glob("heatmap_data_*.json"), 
+                              key=lambda p: p.stat().st_mtime, reverse=True)
+            if json_files:
+                keypoints_heatmap_path = json_files[0]
+                logger.info(f"✓ Usando heatmap de keypoints: {keypoints_heatmap_path}")
+        
+        if keypoints_heatmap_path:
+            # Cargar datos de keypoints
+            with open(keypoints_heatmap_path, 'r') as f:
+                data = json.load(f)
+            
+            team_0_data = data.get('team_0', [])
+            team_1_data = data.get('team_1', [])
+            
+            # Generar heatmaps
+            heatmaps = []
+            for team_data in [team_0_data, team_1_data]:
+                if team_data:
+                    xs = [p['position'][0] for p in team_data]
+                    ys = [p['position'][1] for p in team_data]
+                    heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=50, 
+                                                              range=[[0, 105], [0, 68]])
+                    heatmap_smooth = gaussian_filter(heatmap.T, sigma=2)
+                    heatmaps.append((heatmap_smooth, xedges, yedges, len(team_data)))
+                else:
+                    heatmaps.append((np.zeros((50, 50)), None, None, 0))
+            
+            # Crear figura
+            fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(20, 6.8), facecolor='#1a1a1a')
+            
+            for ax, (heatmap, xedges, yedges, count), team_id in [
+                (ax0, heatmaps[0], 0),
+                (ax1, heatmaps[1], 1)
+            ]:
+                ax.set_facecolor('#2d5016')
+                
+                # Campo de fútbol (105m x 68m)
+                field_color = 'white'
+                lw = 2
+                
+                ax.add_patch(Rectangle((0, 0), 105, 68, fill=False, edgecolor=field_color, linewidth=lw))
+                ax.plot([52.5, 52.5], [0, 68], color=field_color, linewidth=lw)
+                
+                center_circle = Circle((52.5, 34), 9.15, fill=False, edgecolor=field_color, linewidth=lw)
+                ax.add_patch(center_circle)
+                ax.plot(52.5, 34, 'o', color=field_color, markersize=4)
+                
+                ax.add_patch(Rectangle((0, 34-20.16), 16.5, 40.32, fill=False, edgecolor=field_color, linewidth=lw))
+                ax.add_patch(Rectangle((105-16.5, 34-20.16), 16.5, 40.32, fill=False, edgecolor=field_color, linewidth=lw))
+                ax.add_patch(Rectangle((0, 34-9.16), 5.5, 18.32, fill=False, edgecolor=field_color, linewidth=lw))
+                ax.add_patch(Rectangle((105-5.5, 34-9.16), 5.5, 18.32, fill=False, edgecolor=field_color, linewidth=lw))
+                
+                left_arc = Arc((11, 34), 18.3, 18.3, angle=0, theta1=308, theta2=52, edgecolor=field_color, linewidth=lw)
+                right_arc = Arc((94, 34), 18.3, 18.3, angle=0, theta1=128, theta2=232, edgecolor=field_color, linewidth=lw)
+                ax.add_patch(left_arc)
+                ax.add_patch(right_arc)
+                
+                ax.plot(11, 34, 'o', color=field_color, markersize=4)
+                ax.plot(94, 34, 'o', color=field_color, markersize=4)
+                
+                # Heatmap
+                if xedges is not None and count > 0:
+                    heatmap_norm = heatmap / heatmap.max() if heatmap.max() > 0 else heatmap
+                    cmap = cm.Greens if team_id == 0 else cm.Reds
+                    title_color = '#4ade80' if team_id == 0 else '#f87171'
+                    
+                    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+                    ax.imshow(heatmap_norm, extent=extent, origin='lower',
+                             cmap=cmap, alpha=0.6, interpolation='bilinear')
+                    
+                    ax.set_title(f'Team {team_id} Heatmap\n({count} posiciones)',
+                                fontsize=18, fontweight='bold', color=title_color, pad=20)
+                else:
+                    ax.set_title(f'Team {team_id} - Sin datos',
+                                fontsize=18, fontweight='bold', color='gray', pad=20)
+                
+                ax.set_xlim(0, 105)
+                ax.set_ylim(0, 68)
+                ax.set_aspect('equal')
+                ax.axis('off')
+            
+            plt.tight_layout()
+            
+            buf = io.BytesIO()
+            plt.savefig(buf, format='PNG', dpi=100, bbox_inches='tight',
+                       facecolor=fig.get_facecolor(), edgecolor='none')
+            plt.close(fig)
+            buf.seek(0)
+            
+            logger.info(f"Heatmap summary (keypoints) generado para {session_id}")
+            
+            from fastapi.responses import StreamingResponse
+            return StreamingResponse(buf, media_type="image/png")
+        
+        # OPCIÓN 2: Sistema clásico (.npz)
+        search_paths = [
+            BASE_DIR / "outputs_streaming" / f"{session_id}_heatmaps.npz",
+            OUTPUT_DIR / f"{session_id}_heatmaps.npz",
+            OUTPUT_DIR / session_id / f"{session_id}_heatmaps.npz",
+        ]
+        
+        heatmap_path = None
+        for path in search_paths:
+            if path.exists():
+                heatmap_path = path
+                break
+        
+        if heatmap_path is None:
+            logger.warning(f"Heatmap summary no encontrado para session {session_id}")
+            return JSONResponse({"success": False, "error": "Heatmap no encontrado"}, status_code=404)
+        
+        # Cargar datos
+        data = np.load(str(heatmap_path), allow_pickle=True)
+        heatmap_0 = data['team_0_heatmap']
+        heatmap_1 = data['team_1_heatmap']
+        
+        # Normalizar
+        heatmap_0_norm = heatmap_0 / heatmap_0.max() if heatmap_0.max() > 0 else heatmap_0
+        heatmap_1_norm = heatmap_1 / heatmap_1.max() if heatmap_1.max() > 0 else heatmap_1
+        
+        # Crear figura con 2 subplots
+        fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(20, 6.8), facecolor='#1a1a1a')
+        
+        for ax, heatmap_norm, heatmap_orig, team_id in [
+            (ax0, heatmap_0_norm, heatmap_0, 0),
+            (ax1, heatmap_1_norm, heatmap_1, 1)
+        ]:
+            ax.set_facecolor('#2d5016')
+            
+            # Campo de fútbol
+            field_color = 'white'
+            field_lw = 2
+            
+            ax.plot([0, 1], [0, 0], color=field_color, linewidth=field_lw)
+            ax.plot([1, 1], [0, 1], color=field_color, linewidth=field_lw)
+            ax.plot([1, 0], [1, 1], color=field_color, linewidth=field_lw)
+            ax.plot([0, 0], [1, 0], color=field_color, linewidth=field_lw)
+            ax.plot([0.5, 0.5], [0, 1], color=field_color, linewidth=field_lw)
+            
+            circle = plt.Circle((0.5, 0.5), 0.087, color=field_color, fill=False, linewidth=field_lw)
+            ax.add_patch(circle)
+            ax.plot(0.5, 0.5, 'o', color=field_color, markersize=4)
+            
+            # Áreas
+            ax.plot([0, 0.157], [0.296, 0.296], color=field_color, linewidth=field_lw)
+            ax.plot([0.157, 0.157], [0.296, 0.704], color=field_color, linewidth=field_lw)
+            ax.plot([0.157, 0], [0.704, 0.704], color=field_color, linewidth=field_lw)
+            ax.plot([1, 0.843], [0.296, 0.296], color=field_color, linewidth=field_lw)
+            ax.plot([0.843, 0.843], [0.296, 0.704], color=field_color, linewidth=field_lw)
+            ax.plot([0.843, 1], [0.704, 0.704], color=field_color, linewidth=field_lw)
+            
+            # Heatmap
+            cmap = cm.Greens if team_id == 0 else cm.Reds
+            title_color = '#4ade80' if team_id == 0 else '#f87171'
+            
+            heatmap_display = np.flipud(heatmap_norm)
+            ax.imshow(heatmap_display, extent=[0, 1, 0, 1], cmap=cmap, 
+                     alpha=0.7, interpolation='bilinear', origin='lower')
+            
+            ax.set_title(f'Team {team_id} Heatmap\n(intensidad: {heatmap_orig.sum():.1f})',
+                        fontsize=18, fontweight='bold', color=title_color, pad=20)
+            
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.set_aspect('equal')
+            ax.axis('off')
+        
+        plt.tight_layout()
+        
+        # Guardar en buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='PNG', dpi=100, bbox_inches='tight',
+                   facecolor=fig.get_facecolor(), edgecolor='none')
+        plt.close(fig)
+        buf.seek(0)
+        
+        logger.info(f"Heatmap summary generado para session {session_id}")
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(buf, media_type="image/png")
+        
+    except Exception as e:
+        logger.error(f"Error al generar heatmap summary: {e}")
         import traceback
         traceback.print_exc()
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -402,6 +842,7 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             source_type=source_type,
             source=source,
             batch_size_seconds=3.0,
+            output_dir=str(BASE_DIR / "outputs_streaming"),
             device="cuda" if Path("weights/best.pt").exists() else "cpu",
             model_path="weights/best.pt",
             conf_threshold=0.30,
@@ -457,6 +898,34 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             "passes": possession_stats.passes_by_team,
             "possession_changes": possession_stats.possession_changes
         }
+        
+        # Añadir estadísticas espaciales si están disponibles
+        if config.enable_spatial_tracking:
+            try:
+                # Verificar si el archivo de heatmaps existe
+                search_paths = [
+                    BASE_DIR / "outputs_streaming" / f"{session_id}_heatmaps.npz",
+                    OUTPUT_DIR / f"{session_id}_heatmaps.npz"
+                ]
+                
+                spatial_available = False
+                for path in search_paths:
+                    if path.exists():
+                        spatial_available = True
+                        print(f"✓ Heatmaps disponibles para session {session_id} en {path}")
+                        break
+                
+                final_stats["spatial"] = {
+                    "calibration_valid": spatial_available,
+                    "heatmaps_available": spatial_available,
+                    "session_id": session_id
+                }
+                
+                if not spatial_available:
+                    print(f"⚠ Heatmaps no encontrados. Rutas buscadas: {search_paths}")
+            except Exception as e:
+                print(f"Error verificando heatmaps: {e}")
+                final_stats["spatial"] = {"calibration_valid": False}
         
         state["status"] = "completed"
         state["progress"] = 100

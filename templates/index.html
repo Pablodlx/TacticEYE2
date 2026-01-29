@@ -262,6 +262,13 @@
                                             <small>🔄 Analyzing field... Heatmaps will appear when calibration is complete.</small>
                                         </div>
                                     </div>
+                                    
+                                    <!-- Summary Button (hidden initially) -->
+                                    <div id="heatmap-summary-btn-container" class="text-center mt-3" style="display: none;">
+                                        <button class="btn btn-primary btn-lg" onclick="showHeatmapSummary()">
+                                            <i class="fas fa-chart-area me-2"></i>View Full Heatmap Summary
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -495,6 +502,31 @@
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para resumen de heatmaps -->
+    <div class="modal fade" id="heatmapSummaryModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content" style="background-color: #1a1a1a;">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title text-white">
+                        <i class="fas fa-chart-area me-2"></i>Heatmap Summary - Both Teams
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center">
+                        <img id="heatmap-summary-image" src="" alt="Heatmap Summary" class="img-fluid" style="border-radius: 8px; max-height: 70vh;">
+                    </div>
+                </div>
+                <div class="modal-footer border-secondary">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <a id="download-summary-btn" href="" download="heatmap_summary.png" class="btn btn-primary">
+                        <i class="fas fa-download me-2"></i>Download Summary
+                    </a>
                 </div>
             </div>
         </div>

@@ -56,6 +56,75 @@ try:
 except Exception:
     TEAMCLASS_V3_AVAILABLE = False
 
+try:
+    from modules.field_keypoints_yolo import FieldKeypointsYOLO
+    from modules.field_model_keypoints import FieldModel as FieldModelKeypoints
+    from modules.field_calibrator_keypoints import FieldCalibratorKeypoints
+    import torch
+    CALIBRATION_AVAILABLE = True
+except Exception:
+    CALIBRATION_AVAILABLE = False
+    print("⚠️  Field Calibration system no disponible")
+
+
+# Jerarquía de prioridad de keypoints (mayor = más fiable)
+KEYPOINT_PRIORITY = {
+    # Alta prioridad: Centro del campo e intersecciones con áreas
+    'midline_top_intersection': 100,
+    'midline_bottom_intersection': 100,
+    'halfcircle_top': 95,
+    'halfcircle_bottom': 95,
+    'left_penalty_arc_intersection_top': 90,
+    'left_penalty_arc_intersection_bottom': 90,
+    'right_penalty_arc_intersection_top': 90,
+    'right_penalty_arc_intersection_bottom': 90,
+    
+    # Media-alta prioridad: Áreas grandes y pequeñas (intersecciones)
+    'left_bigbox_top_inner': 80,
+    'left_bigbox_bottom_inner': 80,
+    'right_bigbox_top_inner': 80,
+    'right_bigbox_bottom_inner': 80,
+    'left_bigbox_top_outer': 75,
+    'left_bigbox_bottom_outer': 75,
+    'right_bigbox_top_outer': 75,
+    'right_bigbox_bottom_outer': 75,
+    
+    # Media prioridad: Áreas pequeñas
+    'left_smallbox_top_inner': 70,
+    'left_smallbox_bottom_inner': 70,
+    'right_smallbox_top_inner': 70,
+    'right_smallbox_bottom_inner': 70,
+    'left_smallbox_top_outer': 65,
+    'left_smallbox_bottom_outer': 65,
+    'right_smallbox_top_outer': 65,
+    'right_smallbox_bottom_outer': 65,
+    
+    # Baja prioridad: Esquinas (menos fiables)
+    'corner_left_top': 40,
+    'corner_left_bottom': 40,
+    'corner_right_top': 40,
+    'corner_right_bottom': 40,
+}
+
+
+def get_keypoint_score(kp_name, distance_px, max_distance=500.0):
+    """
+    Calcula un score combinando prioridad del keypoint y distancia.
+    Score más alto = mejor referencia.
+    """
+    # Prioridad base del keypoint
+    priority = KEYPOINT_PRIORITY.get(kp_name, 50)  # Default: prioridad media
+    
+    # Factor de distancia (normalizado, inverso: más cerca = mejor)
+    # Distancia se normaliza a [0, 1] y se invierte
+    distance_factor = max(0, 1 - (distance_px / max_distance))
+    
+    # Score combinado: prioridad * factor_distancia
+    # Esto favorece keypoints de alta prioridad, pero penaliza si están muy lejos
+    score = priority * (0.3 + 0.7 * distance_factor)  # 30% prioridad, 70% distancia
+    
+    return score
+
 
 def main():
     p = argparse.ArgumentParser(description='TacticEYE2 - Pipeline simplificado')
@@ -91,6 +160,15 @@ def main():
     # Possession detection
     p.add_argument('--possession-distance', type=int, default=60,
                    help='Distancia máxima en píxeles para posesión del balón')
+    
+    # Field Calibration
+    p.add_argument('--calibrate', action='store_true', help='Activar calibración del campo')
+    p.add_argument('--keypoints-model', default='weights/field_kp_merged_fast/weights/best.pt',
+                   help='Modelo YOLO de keypoints del campo')
+    p.add_argument('--keypoints-conf', type=float, default=0.25,
+                   help='Umbral de confianza para keypoints')
+    p.add_argument('--show-keypoints', action='store_true',
+                   help='Mostrar keypoints detectados en el frame')
     
     # Salida
     p.add_argument('--no-show', action='store_true', help='No mostrar ventana')
@@ -148,6 +226,49 @@ def main():
         
         tracker.team_classifier = team_classifier
     
+    # Estructura para almacenar datos de heatmap basados en keypoints
+    heatmap_data = {
+        'team_0': [],
+        'team_1': [],
+        'frames': [],
+        'keypoints_detected': []
+    }
+    
+    # Inicializar sistema de calibración
+    keypoints_detector = None
+    field_calibrator = None
+    accumulated_keypoints = {}
+    calibration_success = False
+    homography_matrix = None
+    
+    if args.calibrate and CALIBRATION_AVAILABLE:
+        try:
+            keypoints_detector = FieldKeypointsYOLO(
+                model_path=args.keypoints_model,
+                confidence_threshold=args.keypoints_conf,
+                device="cuda" if torch.cuda.is_available() else "cpu"
+            )
+            
+            field_model = FieldModelKeypoints(
+                field_length=105.0,
+                field_width=68.0,
+                use_normalized=False
+            )
+            
+            field_calibrator = FieldCalibratorKeypoints(
+                field_model=field_model,
+                min_keypoints=4,
+                ransac_threshold=5.0
+            )
+            
+            print(f"✓ Sistema de calibración inicializado")
+            print(f"  - Modelo: {args.keypoints_model}")
+            print(f"  - Confidence: {args.keypoints_conf}")
+            print(f"  - Device: {keypoints_detector.device}")
+        except Exception as e:
+            print(f"⚠️  Error inicializando calibración: {e}")
+            keypoints_detector = None
+    
     # Abrir video
     cap = cv2.VideoCapture(args.video)
     if not cap.isOpened():
@@ -171,6 +292,68 @@ def main():
             break
         
         frame_no += 1
+        
+        # Sistema de calibración con keypoints (detección continua frame a frame)
+        current_keypoints = {}
+        if keypoints_detector is not None:
+            # Detectar keypoints en cada frame (o cada N frames para performance)
+            if frame_no % 3 == 0:  # Cada 3 frames para balance entre precisión y velocidad
+                current_keypoints = keypoints_detector.detect_keypoints(frame)
+                
+                # Acumular para calibración (opcional, mantener ventana móvil)
+                MAX_AGE = 300
+                for name, (x, y) in current_keypoints.items():
+                    if name not in accumulated_keypoints:
+                        accumulated_keypoints[name] = []
+                    accumulated_keypoints[name].append((x, y, frame_no))
+                
+                # Limpiar keypoints antiguos
+                for name in list(accumulated_keypoints.keys()):
+                    accumulated_keypoints[name] = [
+                        (x, y, f) for x, y, f in accumulated_keypoints[name]
+                        if frame_no - f <= MAX_AGE
+                    ]
+                    if not accumulated_keypoints[name]:
+                        del accumulated_keypoints[name]
+                
+                # Promediar keypoints para calibración (opcional)
+                averaged_keypoints = {}
+                for name, points in accumulated_keypoints.items():
+                    if points:
+                        xs = [x for x, y, f in points]
+                        ys = [y for x, y, f in points]
+                        averaged_keypoints[name] = (np.mean(xs), np.mean(ys))
+                
+                # Intentar calibración cada 60 frames (mantener homografía actualizada)
+                if frame_no % 60 == 0 and len(averaged_keypoints) >= 4:
+                    success = field_calibrator.estimate_homography(averaged_keypoints)
+                    if success:
+                        if not calibration_success:
+                            print(f"[Calibración] ✓ Completada en frame {frame_no}: {len(field_calibrator.matched_keypoints)}/{len(averaged_keypoints)} keypoints, error={field_calibrator.reprojection_error:.2f}px")
+                        calibration_success = True
+                        homography_matrix = field_calibrator.H
+        
+        # Mostrar estado de calibración (solo info)
+        if keypoints_detector is not None:
+            cal_text = f"Campo: Calibrado ({len(current_keypoints)} kp)" if calibration_success else f"Calibrando... ({len(current_keypoints)} kp)"
+            cal_color = (0, 255, 0) if calibration_success else (0, 165, 255)
+            cv2.putText(frame, cal_text, (10, frame.shape[0] - 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, cal_color, 2)
+            
+            # Registrar keypoints detectados en este frame
+            if current_keypoints:
+                heatmap_data['keypoints_detected'].append({
+                    'frame': frame_no,
+                    'keypoints': list(current_keypoints.keys()),
+                    'count': len(current_keypoints)
+                })
+            
+            # Registrar información del frame
+            heatmap_data['frames'].append({
+                'number': frame_no,
+                'calibrated': calibration_success,
+                'keypoints_count': len(current_keypoints)
+            })
         
         # Mostrar estadísticas de pases cada 1000 frames
         if frame_no > 0 and frame_no % 1000 == 0 and possession is not None:
@@ -219,6 +402,73 @@ def main():
                 except Exception:
                     pass
                 
+                # Calcular relaciones con keypoints detectados en este frame
+                field_coords = None
+                nearest_keypoint = None
+                nearest_distance = float('inf')
+                best_keypoint_score = -1
+                
+                if cid in (0, 3):  # Solo jugadores y porteros
+                    center_x = (x1 + x2) / 2.0
+                    center_y = y2  # Punto inferior del bounding box (pies)
+                    
+                    # Método 1: Transformar usando homografía si está calibrada
+                    if calibration_success and homography_matrix is not None:
+                        point = np.array([[center_x, center_y]], dtype=np.float32).reshape(-1, 1, 2)
+                        transformed = cv2.perspectiveTransform(point, homography_matrix)
+                        field_x, field_y = transformed[0][0]
+                        field_coords = (field_x, field_y)
+                    
+                    # Método 2: Seleccionar mejor keypoint usando sistema de scoring jerárquico
+                    if current_keypoints:
+                        import math
+                        
+                        # Evaluar todos los keypoints y elegir el mejor según score
+                        for kp_name, (kp_x, kp_y) in current_keypoints.items():
+                            dist = math.hypot(center_x - kp_x, center_y - kp_y)
+                            
+                            # Calcular score combinado (prioridad + distancia)
+                            score = get_keypoint_score(kp_name, dist)
+                            
+                            # Elegir keypoint con mejor score
+                            if score > best_keypoint_score:
+                                best_keypoint_score = score
+                                nearest_keypoint = kp_name
+                                nearest_distance = dist
+                        
+                        # Guardar información de relación keypoint-jugador para heatmaps
+                        # Esta info se puede usar para generar mapas de calor
+                        if hasattr(tracker.active_tracks[tid], 'keypoint_relations'):
+                            tracker.active_tracks[tid].keypoint_relations.append({
+                                'frame': frame_no,
+                                'nearest_kp': nearest_keypoint,
+                                'distance': nearest_distance,
+                                'field_coords': field_coords,
+                                'team_id': team_id,
+                                'kp_score': best_keypoint_score
+                            })
+                        else:
+                            tracker.active_tracks[tid].keypoint_relations = [{
+                                'frame': frame_no,
+                                'nearest_kp': nearest_keypoint,
+                                'distance': nearest_distance,
+                                'field_coords': field_coords,
+                                'team_id': team_id,
+                                'kp_score': best_keypoint_score
+                            }]
+                        
+                        # Recolectar datos para heatmap (solo si es jugador válido de un equipo)
+                        if team_id in (0, 1) and field_coords:
+                            heatmap_data[f'team_{team_id}'].append({
+                                'frame': frame_no,
+                                'track_id': tid,
+                                'position': field_coords,
+                                'nearest_kp': nearest_keypoint,
+                                'kp_distance': nearest_distance,
+                                'kp_score': best_keypoint_score,
+                                'kp_priority': KEYPOINT_PRIORITY.get(nearest_keypoint, 50)
+                            })
+                
                 # Color por clase y equipo
                 if cid == 2:  # referee
                     color = (0, 140, 255)
@@ -235,7 +485,16 @@ def main():
                         color = (200, 100, 0)
                     team_label = 'NA' if team_id is None or team_id < 0 else str(team_id)
                 
-                label = f"ID:{tid} {names.get(cid, cid) if names else cid} T{team_label}"
+                # Label con información según modo debug
+                if args.show_keypoints and nearest_keypoint:
+                    # Mostrar keypoint más cercano y distancia
+                    label = f"ID:{tid} T{team_label} [{nearest_keypoint[:8]}:{nearest_distance:.0f}px]"
+                elif args.show_keypoints and field_coords:
+                    # Mostrar coordenadas de campo
+                    label = f"ID:{tid} T{team_label} ({field_coords[0]:.1f},{field_coords[1]:.1f})m"
+                else:
+                    label = f"ID:{tid} {names.get(cid, cid) if names else cid} T{team_label}"
+                
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, label, (x1, max(y1-6,0)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
             
@@ -245,16 +504,24 @@ def main():
                 
                 # PASO 1: Buscar posición del balón
                 ball_pos = None
+                ball_pos_field = None
                 for tid, bbox, cid in tracks:
                     if cid == 1:  # ball
                         x1, y1, x2, y2 = map(int, bbox)
                         ball_pos = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                        
+                        # Transformar a coordenadas del campo si está calibrado
+                        if calibration_success and homography_matrix is not None:
+                            point = np.array([[ball_pos[0], ball_pos[1]]], dtype=np.float32).reshape(-1, 1, 2)
+                            transformed = cv2.perspectiveTransform(point, homography_matrix)
+                            ball_pos_field = tuple(transformed[0][0])
                         break
                 
                 # PASO 2: Buscar jugador más cercano al balón
                 ball_owner_team = None
                 ball_owner_id = None
                 min_distance = float('inf')
+                min_distance_field = float('inf')
                 
                 if ball_pos is not None:
                     for tid, bbox, cid in tracks:
@@ -263,21 +530,51 @@ def main():
                         
                         x1, y1, x2, y2 = map(int, bbox)
                         player_pos = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
-                        dist = math.hypot(player_pos[0] - ball_pos[0], player_pos[1] - ball_pos[1])
                         
-                        if dist < min_distance:
-                            min_distance = dist
-                            ball_owner_id = tid
-                            try:
-                                ball_owner_team = tracker.active_tracks[tid].team_id
-                            except Exception:
-                                ball_owner_team = None
+                        # Distancia en píxeles (para visualización)
+                        dist_px = math.hypot(player_pos[0] - ball_pos[0], player_pos[1] - ball_pos[1])
+                        
+                        # Si está calibrado, usar distancia en coordenadas del campo (metros)
+                        if calibration_success and homography_matrix is not None and ball_pos_field is not None:
+                            point = np.array([[player_pos[0], y2]], dtype=np.float32).reshape(-1, 1, 2)
+                            transformed = cv2.perspectiveTransform(point, homography_matrix)
+                            player_pos_field = tuple(transformed[0][0])
+                            dist_field = math.hypot(
+                                player_pos_field[0] - ball_pos_field[0],
+                                player_pos_field[1] - ball_pos_field[1]
+                            )
+                            
+                            if dist_field < min_distance_field:
+                                min_distance_field = dist_field
+                                min_distance = dist_px  # Guardar también distancia en píxeles
+                                ball_owner_id = tid
+                                try:
+                                    ball_owner_team = tracker.active_tracks[tid].team_id
+                                except Exception:
+                                    ball_owner_team = None
+                        else:
+                            # Usar distancia en píxeles si no está calibrado
+                            if dist_px < min_distance:
+                                min_distance = dist_px
+                                ball_owner_id = tid
+                                try:
+                                    ball_owner_team = tracker.active_tracks[tid].team_id
+                                except Exception:
+                                    ball_owner_team = None
                 
                 # PASO 3: Validar distancia
-                max_possession_distance = args.possession_distance
-                if min_distance > max_possession_distance:
-                    ball_owner_team = None
-                    ball_owner_id = None
+                if calibration_success and ball_pos_field is not None:
+                    # Usar distancia en metros (típicamente 2-3 metros máximo)
+                    max_possession_distance_m = 3.0
+                    if min_distance_field > max_possession_distance_m:
+                        ball_owner_team = None
+                        ball_owner_id = None
+                else:
+                    # Usar distancia en píxeles
+                    max_possession_distance = args.possession_distance
+                    if min_distance > max_possession_distance:
+                        ball_owner_team = None
+                        ball_owner_id = None
                 
                 # PASO 4: Filtrar team_id inválidos (referees = -1)
                 if ball_owner_team is not None and ball_owner_team < 0:
@@ -302,7 +599,11 @@ def main():
                 s1 = stats['possession_seconds'].get(1, 0.0)
                 stext3 = f"Time: T0={s0:.1f}s T1={s1:.1f}s"
                 
-                stext4 = f"Max dist: {max_possession_distance}px"
+                # Mostrar distancia según modo
+                if calibration_success and ball_pos_field is not None:
+                    stext4 = f"Max dist: 3.0m (campo calibrado)"
+                else:
+                    stext4 = f"Max dist: {args.possession_distance}px"
                 
                 cv2.putText(frame, stext1, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
                 cv2.putText(frame, stext2, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100,255,100), 2)
@@ -323,8 +624,12 @@ def main():
                             # Línea al balón
                             cv2.line(frame, player_center, ball_center, (0, 255, 255), 2)
                             
-                            # Distancia
-                            dist_text = f"{min_distance:.0f}px"
+                            # Distancia (mostrar en metros si está calibrado)
+                            if calibration_success and ball_pos_field is not None:
+                                dist_text = f"{min_distance_field:.2f}m"
+                            else:
+                                dist_text = f"{min_distance:.0f}px"
+                            
                             mid_point = (int((player_center[0] + ball_center[0])/2), 
                                         int((player_center[1] + ball_center[1])/2))
                             cv2.putText(frame, dist_text, mid_point, 
@@ -346,6 +651,54 @@ def main():
                 cv2.putText(frame, label, (x1, max(y1-6,0)), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
         
+        # Visualizar keypoints detectados con bounding boxes
+        if args.show_keypoints and current_keypoints:
+            # Obtener prioridades para codificar color
+            keypoint_box_size = 15  # Tamaño del box alrededor del keypoint
+            
+            for kp_name, (kp_x, kp_y) in current_keypoints.items():
+                # Obtener prioridad del keypoint
+                priority = KEYPOINT_PRIORITY.get(kp_name, 50)
+                
+                # Color según prioridad
+                if priority >= 90:  # ALTA (centro del campo)
+                    kp_color = (0, 255, 255)  # Amarillo brillante
+                elif priority >= 75:  # Media-Alta (áreas grandes)
+                    kp_color = (0, 200, 255)  # Naranja
+                elif priority >= 65:  # Media (áreas pequeñas)
+                    kp_color = (255, 150, 0)  # Azul claro
+                else:  # Baja (esquinas)
+                    kp_color = (180, 180, 180)  # Gris
+                
+                # Dibujar bounding box centrado en el keypoint
+                x1 = int(kp_x - keypoint_box_size)
+                y1 = int(kp_y - keypoint_box_size)
+                x2 = int(kp_x + keypoint_box_size)
+                y2 = int(kp_y + keypoint_box_size)
+                
+                # Box del keypoint
+                cv2.rectangle(frame, (x1, y1), (x2, y2), kp_color, 2)
+                
+                # Label del keypoint (nombre corto)
+                kp_label = kp_name.replace('_', ' ').title()
+                # Acortar nombres muy largos
+                if len(kp_label) > 20:
+                    parts = kp_label.split()
+                    if len(parts) > 2:
+                        kp_label = f"{parts[0][0]}{parts[1][0]}{parts[-1][:3]}"
+                
+                # Fondo semi-transparente para el texto
+                label_size = cv2.getTextSize(kp_label, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+                cv2.rectangle(frame, (x1, y1 - 18), (x1 + label_size[0] + 4, y1 - 2), 
+                             kp_color, -1)
+                
+                # Texto del label
+                cv2.putText(frame, kp_label, (x1 + 2, y1 - 6),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
+                
+                # Punto central
+                cv2.circle(frame, (int(kp_x), int(kp_y)), 3, (255, 255, 255), -1)
+        
         # Mostrar/guardar
         if not args.no_show:
             cv2.imshow('TacticEYE2', frame)
@@ -362,6 +715,48 @@ def main():
     if writer:
         writer.release()
     cv2.destroyAllWindows()
+    
+    # Exportar datos de heatmap basados en keypoints
+    if keypoints_detector is not None and (heatmap_data['team_0'] or heatmap_data['team_1']):
+        import json
+        import os
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = 'outputs_heatmap'
+        os.makedirs(output_dir, exist_ok=True)
+        
+        heatmap_file = os.path.join(output_dir, f'heatmap_data_{timestamp}.json')
+        
+        # Preparar resumen
+        summary = {
+            'total_frames': frame_no,
+            'team_0_positions': len(heatmap_data['team_0']),
+            'team_1_positions': len(heatmap_data['team_1']),
+            'keypoints_frames': len(heatmap_data['keypoints_detected']),
+            'calibration_success': calibration_success
+        }
+        
+        export_data = {
+            'summary': summary,
+            'team_0': heatmap_data['team_0'],
+            'team_1': heatmap_data['team_1'],
+            'keypoints_detected': heatmap_data['keypoints_detected'],
+            'frames_info': heatmap_data['frames']
+        }
+        
+        with open(heatmap_file, 'w') as f:
+            json.dump(export_data, f, indent=2)
+        
+        print(f"\n{'='*70}")
+        print('HEATMAP DATA EXPORTED')
+        print('='*70)
+        print(f"\nArchivo: {heatmap_file}")
+        print(f"  - Team 0: {summary['team_0_positions']} posiciones registradas")
+        print(f"  - Team 1: {summary['team_1_positions']} posiciones registradas")
+        print(f"  - Frames con keypoints: {summary['keypoints_frames']}")
+        print(f"  - Campo calibrado: {'Sí' if summary['calibration_success'] else 'No'}")
+        print('='*70)
     
     # Resumen final de posesión
     if possession is not None:
@@ -402,7 +797,39 @@ def main():
         
         print('='*70)
     
-    print('Detección finalizada')
+    # Resumen final de calibración
+    if keypoints_detector is not None:
+        print('\n' + '='*70)
+        print('FIELD CALIBRATION SUMMARY')
+        print('='*70)
+        
+        if calibration_success:
+            print(f"\n✓ Calibración exitosa")
+            print(f"  - Keypoints acumulados: {len(accumulated_keypoints)}")
+            print(f"  - Keypoints matched: {len(field_calibrator.matched_keypoints)}")
+            print(f"  - Reprojection error: {field_calibrator.reprojection_error:.2f}px")
+            print(f"\n  Homography matrix:")
+            for row in homography_matrix:
+                print(f"    [{row[0]:9.6f}, {row[1]:9.6f}, {row[2]:9.6f}]")
+            
+            print(f"\n  Keypoints detectados:")
+            for name in sorted(accumulated_keypoints.keys()):
+                count = len(accumulated_keypoints[name])
+                x, y = averaged_keypoints[name]
+                print(f"    - {name}: ({x:.1f}, {y:.1f}) [{count} detecciones]")
+        else:
+            print(f"\n⚠ Calibración no completada")
+            print(f"  - Keypoints acumulados: {len(accumulated_keypoints)}")
+            print(f"  - Se requieren al menos 4 keypoints para calibrar")
+            if accumulated_keypoints:
+                print(f"\n  Keypoints detectados:")
+                for name in sorted(accumulated_keypoints.keys()):
+                    count = len(accumulated_keypoints[name])
+                    print(f"    - {name}: [{count} detecciones]")
+        
+        print('='*70)
+    
+    print('\nDetección finalizada')
 
 
 if __name__ == '__main__':
