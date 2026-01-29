@@ -60,6 +60,13 @@ try:
     from modules.field_keypoints_yolo import FieldKeypointsYOLO
     from modules.field_model_keypoints import FieldModel as FieldModelKeypoints
     from modules.field_calibrator_keypoints import FieldCalibratorKeypoints
+    from modules.field_heatmap_system import (
+        FIELD_POINTS,
+        FIELD_LENGTH,
+        FIELD_WIDTH,
+        estimate_homography_with_flip_resolution,
+        project_points_by_triangulation
+    )
     import torch
     CALIBRATION_AVAILABLE = True
 except Exception:
@@ -234,12 +241,23 @@ def main():
         'keypoints_detected': []
     }
     
+    # Acumulador temporal de posiciones para triangulación (por frame)
+    frame_player_positions = []  # Para proyectar en batch
+    current_frame_keypoints_list = None
+    is_flipped = False
+    last_valid_keypoints = None  # Persistir últimos keypoints válidos
+    last_valid_flip = False  # Persistir última orientación válida
+    accumulated_kp_for_triangulation = {}  # Acumular keypoints detectados a lo largo de frames
+    last_triangulation_update_frame = 0
+    
     # Inicializar sistema de calibración
     keypoints_detector = None
     field_calibrator = None
     accumulated_keypoints = {}
     calibration_success = False
     homography_matrix = None
+    current_frame_keypoints_list = None  # Para triangulación
+    is_flipped = False  # Orientación del campo
     
     if args.calibrate and CALIBRATION_AVAILABLE:
         try:
@@ -300,14 +318,75 @@ def main():
             if frame_no % 3 == 0:  # Cada 3 frames para balance entre precisión y velocidad
                 current_keypoints = keypoints_detector.detect_keypoints(frame)
                 
+                # Acumular keypoints detectados para triangulación
+                # Mantener ventana móvil de últimos 150 frames (~5 segundos a 30fps)
+                MAX_KP_AGE = 150
+                for name, coords in current_keypoints.items():
+                    accumulated_kp_for_triangulation[name] = {
+                        'xy': coords,
+                        'frame': frame_no
+                    }
+                
+                # Limpiar keypoints antiguos
+                accumulated_kp_for_triangulation = {
+                    name: data for name, data in accumulated_kp_for_triangulation.items()
+                    if frame_no - data['frame'] <= MAX_KP_AGE
+                }
+                
+                # Convertir keypoints acumulados a formato lista para triangulación
+                current_frame_keypoints_list = [
+                    {"cls_name": name, "xy": data['xy'], "conf": 0.9}
+                    for name, data in accumulated_kp_for_triangulation.items()
+                ]
+                
+                # DEBUG: Mostrar cuando se detectan keypoints
+                if current_keypoints:
+                    kp_freshness = {
+                        name: f"{'🆕' if frame_no - data['frame'] == 0 else f'🕐{frame_no - data['frame']}f'}"
+                        for name, data in accumulated_kp_for_triangulation.items()
+                    }
+                    if frame_no <= 100 or len(current_frame_keypoints_list) >= 3:
+                        # Mostrar coordenadas de keypoints detectados
+                        kp_coords_debug = {}
+                        for name, data in accumulated_kp_for_triangulation.items():
+                            x_px, y_px = data['xy']
+                            kp_coords_debug[name] = f"({x_px:.0f},{y_px:.0f})"
+                        print(f"[DEBUG Frame {frame_no}] KPs frescos: {list(current_keypoints.keys())} | "
+                              f"Total acumulados: {len(current_frame_keypoints_list)}")
+                        if len(current_frame_keypoints_list) >= 1:
+                            print(f"  Píxeles detectados: {kp_coords_debug}")
+                
+                # Determinar orientación del campo usando heurística geométrica
+                # Reducir min_points a 2 para videos con pocos keypoints visibles
+                if len(current_frame_keypoints_list) >= 2:
+                    _, is_flipped = estimate_homography_with_flip_resolution(
+                        current_frame_keypoints_list,
+                        FIELD_POINTS,
+                        min_points=2,  # Reducido de 3 a 2
+                        conf_threshold=0.3
+                    )
+                    # Guardar como último válido
+                    last_valid_keypoints = current_frame_keypoints_list
+                    last_valid_flip = is_flipped
+                    last_triangulation_update_frame = frame_no
+                    
+                    if frame_no <= 100 or (frame_no - last_triangulation_update_frame == 0 and frame_no % 30 == 0):
+                        print(f"[TRIANGULACIÓN Frame {frame_no}] ✓ Sistema actualizado con {len(current_frame_keypoints_list)} keypoints, flip={is_flipped}")
+                
                 # Acumular para calibración (opcional, mantener ventana móvil)
                 MAX_AGE = 300
                 for name, (x, y) in current_keypoints.items():
                     if name not in accumulated_keypoints:
                         accumulated_keypoints[name] = []
                     accumulated_keypoints[name].append((x, y, frame_no))
-                
-                # Limpiar keypoints antiguos
+            else:
+                # Usar últimos keypoints válidos si no se detectan nuevos
+                current_frame_keypoints_list = last_valid_keypoints
+                is_flipped = last_valid_flip
+            
+            # Limpiar keypoints antiguos (hacer siempre, no solo cuando se detectan nuevos)
+            if accumulated_keypoints:
+                MAX_AGE = 300
                 for name in list(accumulated_keypoints.keys()):
                     accumulated_keypoints[name] = [
                         (x, y, f) for x, y, f in accumulated_keypoints[name]
@@ -315,23 +394,26 @@ def main():
                     ]
                     if not accumulated_keypoints[name]:
                         del accumulated_keypoints[name]
-                
-                # Promediar keypoints para calibración (opcional)
-                averaged_keypoints = {}
-                for name, points in accumulated_keypoints.items():
-                    if points:
-                        xs = [x for x, y, f in points]
-                        ys = [y for x, y, f in points]
-                        averaged_keypoints[name] = (np.mean(xs), np.mean(ys))
-                
-                # Intentar calibración cada 60 frames (mantener homografía actualizada)
-                if frame_no % 60 == 0 and len(averaged_keypoints) >= 4:
-                    success = field_calibrator.estimate_homography(averaged_keypoints)
-                    if success:
-                        if not calibration_success:
-                            print(f"[Calibración] ✓ Completada en frame {frame_no}: {len(field_calibrator.matched_keypoints)}/{len(averaged_keypoints)} keypoints, error={field_calibrator.reprojection_error:.2f}px")
-                        calibration_success = True
-                        homography_matrix = field_calibrator.H
+            
+            # Promediar keypoints para calibración (opcional)
+            averaged_keypoints = {}
+            for name, points in accumulated_keypoints.items():
+                if points:
+                    xs = [x for x, y, f in points]
+                    ys = [y for x, y, f in points]
+                    averaged_keypoints[name] = (np.mean(xs), np.mean(ys))
+            
+            # Intentar calibración cada 60 frames (mantener homografía actualizada)
+            if frame_no % 60 == 0 and len(averaged_keypoints) >= 4:
+                success = field_calibrator.estimate_homography(averaged_keypoints)
+                if success:
+                    if not calibration_success:
+                        print(f"[Calibración] ✓ Completada en frame {frame_no}: {len(field_calibrator.matched_keypoints)}/{len(averaged_keypoints)} keypoints, error={field_calibrator.reprojection_error:.2f}px")
+                    calibration_success = True
+                    homography_matrix = field_calibrator.H
+        else:
+            # Si no hay detector de keypoints, resetear
+            current_frame_keypoints_list = None
         
         # Mostrar estado de calibración (solo info)
         if keypoints_detector is not None:
@@ -391,83 +473,182 @@ def main():
         if tracker:
             tracks = tracker.update(frame, boxes, scores, cls_ids)
             
-            # Dibujar tracks
+            # PASO 1: Acumular posiciones de jugadores en píxeles
+            frame_player_positions = []
+            for tid, bbox, cid in tracks:
+                if cid in (0, 3):  # Solo jugadores y porteros
+                    x1, y1, x2, y2 = map(int, bbox)
+                    center_x = (x1 + x2) / 2.0
+                    center_y = y2  # Pies del jugador
+                    
+                    team_id = -1
+                    try:
+                        team_id = tracker.active_tracks[tid].team_id
+                    except Exception:
+                        pass
+                    
+                    frame_player_positions.append({
+                        'tid': tid,
+                        'team_id': team_id,
+                        'cid': cid,
+                        'pixel_pos': (center_x, center_y),
+                        'bbox': bbox
+                    })
+            
+            # PASO 2: Proyectar todas las posiciones con TRIANGULACIÓN
+            field_positions_map = {}  # {tid: (x_field, y_field)}
+            
+            # DEBUG: Verificar estado antes de proyectar
+            if frame_no % 5 == 0:
+                num_kps_before_projection = len(current_frame_keypoints_list) if current_frame_keypoints_list else 0
+                num_players = len(frame_player_positions)
+                print(f"[DEBUG PRE-PROYECCIÓN Frame {frame_no}] KPs disponibles: {num_kps_before_projection}, Jugadores: {num_players}")
+            
+            if current_frame_keypoints_list and len(frame_player_positions) > 0:
+                try:
+                    pixel_positions = [p['pixel_pos'] for p in frame_player_positions]
+                    field_coords_array = project_points_by_triangulation(
+                        pixel_positions,
+                        current_frame_keypoints_list,
+                        FIELD_POINTS,
+                        is_flipped,
+                        min_references=1,  # Permitir 1 keypoint para proyección básica
+                        max_references=4
+                    )
+                    
+                    # Mapear resultados
+                    for i, player_data in enumerate(frame_player_positions):
+                        if not np.isnan(field_coords_array[i]).any():
+                            field_positions_map[player_data['tid']] = tuple(field_coords_array[i])
+                            
+                            # Guardar para heatmap
+                            if player_data['team_id'] in (0, 1):
+                                heatmap_data[f"team_{player_data['team_id']}"].append({
+                                    'frame': frame_no,
+                                    'track_id': player_data['tid'],
+                                    'position': tuple(field_coords_array[i]),
+                                    'method': 'triangulation'
+                                })
+                except Exception as e:
+                    if frame_no % 100 == 0:
+                        print(f"[Triangulación] Error frame {frame_no}: {e}")
+            
+            # DEBUG: Imprimir posiciones cada 5 frames
+            if frame_no % 5 == 0 and (field_positions_map or frame_player_positions):
+                print(f"\n{'='*70}")
+                print(f"[Frame {frame_no}] Posiciones de Elementos Detectados")
+                print(f"{'='*70}")
+                print(f"Sistema de coordenadas:")
+                print(f"  X = Longitudinal (0-{FIELD_LENGTH}m, línea gol izq→der)")
+                print(f"  Y = Lateral (0-{FIELD_WIDTH}m, banda abajo→arriba)")
+                print(f"  Centro campo = ({FIELD_LENGTH/2:.1f}, {FIELD_WIDTH/2:.1f})m")
+                
+                num_kps = len(current_frame_keypoints_list) if current_frame_keypoints_list else 0
+                kp_source = ""
+                if num_kps > 0:
+                    # Verificar si son keypoints del frame actual o reutilizados
+                    if frame_no % 3 == 0:
+                        kp_source = " (detectados en este frame)"
+                    else:
+                        kp_source = " (reutilizados del último válido)"
+                
+                print(f"  Keypoints detectados: {num_kps}{kp_source}")
+                if num_kps > 0:
+                    print(f"  Orientación flip: {is_flipped}")
+                else:
+                    print(f"  ⚠️  Sin keypoints → Sin proyección posible")
+                
+                print(f"\nElementos proyectados: {len(field_positions_map)}/{len(frame_player_positions)}")
+                print(f"{'-'*70}")
+                
+                # Agrupar por equipo para mejor visualización
+                team_0_players = []
+                team_1_players = []
+                other_players = []
+                
+                for player_data in frame_player_positions:
+                    tid = player_data['tid']
+                    team_id = player_data['team_id']
+                    px_pos = player_data['pixel_pos']
+                    field_pos = field_positions_map.get(tid)
+                    
+                    player_info = {
+                        'tid': tid,
+                        'px': px_pos,
+                        'field': field_pos
+                    }
+                    
+                    if team_id == 0:
+                        team_0_players.append(player_info)
+                    elif team_id == 1:
+                        team_1_players.append(player_info)
+                    else:
+                        other_players.append(player_info)
+                
+                # Imprimir Team 0
+                if team_0_players:
+                    print(f"\n🟢 TEAM 0 ({len(team_0_players)} jugadores):")
+                    for p in team_0_players:
+                        if p['field']:
+                            x_f, y_f = p['field']
+                            # Zona aproximada
+                            if x_f < FIELD_LENGTH / 3:
+                                zone = "Defensa"
+                            elif x_f < 2 * FIELD_LENGTH / 3:
+                                zone = "Mediocampo"
+                            else:
+                                zone = "Ataque"
+                            
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) "
+                                  f"→ Campo: ({x_f:5.1f}m, {y_f:5.1f}m) | {zone}")
+                        else:
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) → ❌ No proyectado")
+                
+                # Imprimir Team 1
+                if team_1_players:
+                    print(f"\n🔴 TEAM 1 ({len(team_1_players)} jugadores):")
+                    for p in team_1_players:
+                        if p['field']:
+                            x_f, y_f = p['field']
+                            # Zona aproximada
+                            if x_f < FIELD_LENGTH / 3:
+                                zone = "Defensa"
+                            elif x_f < 2 * FIELD_LENGTH / 3:
+                                zone = "Mediocampo"
+                            else:
+                                zone = "Ataque"
+                            
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) "
+                                  f"→ Campo: ({x_f:5.1f}m, {y_f:5.1f}m) | {zone}")
+                        else:
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) → ❌ No proyectado")
+                
+                # Imprimir otros (sin equipo asignado)
+                if other_players:
+                    print(f"\n⚪ SIN EQUIPO ({len(other_players)} jugadores):")
+                    for p in other_players:
+                        if p['field']:
+                            x_f, y_f = p['field']
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) "
+                                  f"→ Campo: ({x_f:5.1f}m, {y_f:5.1f}m)")
+                        else:
+                            print(f"  ID #{p['tid']:3d} | Píxeles: ({p['px'][0]:4.0f}, {p['px'][1]:4.0f}) → ❌ No proyectado")
+                
+                print(f"{'='*70}\n")
+            
+            # PASO 3: Dibujar tracks con información de campo
             for tid, bbox, cid in tracks:
                 x1, y1, x2, y2 = map(int, bbox)
                 
-                # Obtener team_id si está disponible
+                # Obtener team_id
                 team_id = -1
                 try:
                     team_id = tracker.active_tracks[tid].team_id
                 except Exception:
                     pass
                 
-                # Calcular relaciones con keypoints detectados en este frame
-                field_coords = None
-                nearest_keypoint = None
-                nearest_distance = float('inf')
-                best_keypoint_score = -1
-                
-                if cid in (0, 3):  # Solo jugadores y porteros
-                    center_x = (x1 + x2) / 2.0
-                    center_y = y2  # Punto inferior del bounding box (pies)
-                    
-                    # Método 1: Transformar usando homografía si está calibrada
-                    if calibration_success and homography_matrix is not None:
-                        point = np.array([[center_x, center_y]], dtype=np.float32).reshape(-1, 1, 2)
-                        transformed = cv2.perspectiveTransform(point, homography_matrix)
-                        field_x, field_y = transformed[0][0]
-                        field_coords = (field_x, field_y)
-                    
-                    # Método 2: Seleccionar mejor keypoint usando sistema de scoring jerárquico
-                    if current_keypoints:
-                        import math
-                        
-                        # Evaluar todos los keypoints y elegir el mejor según score
-                        for kp_name, (kp_x, kp_y) in current_keypoints.items():
-                            dist = math.hypot(center_x - kp_x, center_y - kp_y)
-                            
-                            # Calcular score combinado (prioridad + distancia)
-                            score = get_keypoint_score(kp_name, dist)
-                            
-                            # Elegir keypoint con mejor score
-                            if score > best_keypoint_score:
-                                best_keypoint_score = score
-                                nearest_keypoint = kp_name
-                                nearest_distance = dist
-                        
-                        # Guardar información de relación keypoint-jugador para heatmaps
-                        # Esta info se puede usar para generar mapas de calor
-                        if hasattr(tracker.active_tracks[tid], 'keypoint_relations'):
-                            tracker.active_tracks[tid].keypoint_relations.append({
-                                'frame': frame_no,
-                                'nearest_kp': nearest_keypoint,
-                                'distance': nearest_distance,
-                                'field_coords': field_coords,
-                                'team_id': team_id,
-                                'kp_score': best_keypoint_score
-                            })
-                        else:
-                            tracker.active_tracks[tid].keypoint_relations = [{
-                                'frame': frame_no,
-                                'nearest_kp': nearest_keypoint,
-                                'distance': nearest_distance,
-                                'field_coords': field_coords,
-                                'team_id': team_id,
-                                'kp_score': best_keypoint_score
-                            }]
-                        
-                        # Recolectar datos para heatmap (solo si es jugador válido de un equipo)
-                        if team_id in (0, 1) and field_coords:
-                            heatmap_data[f'team_{team_id}'].append({
-                                'frame': frame_no,
-                                'track_id': tid,
-                                'position': field_coords,
-                                'nearest_kp': nearest_keypoint,
-                                'kp_distance': nearest_distance,
-                                'kp_score': best_keypoint_score,
-                                'kp_priority': KEYPOINT_PRIORITY.get(nearest_keypoint, 50)
-                            })
+                # Obtener coordenadas de campo si están disponibles
+                field_coords = field_positions_map.get(tid, None)
                 
                 # Color por clase y equipo
                 if cid == 2:  # referee
@@ -486,11 +667,8 @@ def main():
                     team_label = 'NA' if team_id is None or team_id < 0 else str(team_id)
                 
                 # Label con información según modo debug
-                if args.show_keypoints and nearest_keypoint:
-                    # Mostrar keypoint más cercano y distancia
-                    label = f"ID:{tid} T{team_label} [{nearest_keypoint[:8]}:{nearest_distance:.0f}px]"
-                elif args.show_keypoints and field_coords:
-                    # Mostrar coordenadas de campo
+                if args.show_keypoints and field_coords:
+                    # Mostrar coordenadas de campo por triangulación
                     label = f"ID:{tid} T{team_label} ({field_coords[0]:.1f},{field_coords[1]:.1f})m"
                 else:
                     label = f"ID:{tid} {names.get(cid, cid) if names else cid} T{team_label}"

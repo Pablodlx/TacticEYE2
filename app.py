@@ -28,6 +28,12 @@ try:
     from modules.video_sources import open_source, SourceType
     from modules.match_analyzer import run_match_analysis, AnalysisConfig
     from modules.match_state import FileSystemStorage
+    # Sistema de heatmaps con resolución de flip
+    from modules.field_heatmap_system import (
+        FIELD_POINTS,
+        HeatmapAccumulator,
+        estimate_homography_with_flip_resolution
+    )
 except Exception as e:
     print(f"Error importando módulos: {e}")
 
@@ -393,13 +399,20 @@ async def get_heatmap(session_id: str, team_id: int):
         logger.info(f"Cargando heatmap desde: {heatmap_path}")
         data = np.load(str(heatmap_path), allow_pickle=True)
         
-        # Verificar que la clave existe
+        # Intentar usar heatmap con resolución de flip si está disponible
+        heatmap_flip_key = f'team_{team_id}_heatmap_flip'
         heatmap_key = f'team_{team_id}_heatmap'
-        if heatmap_key not in data:
-            logger.error(f"Clave {heatmap_key} no encontrada. Claves disponibles: {list(data.keys())}")
+        
+        if heatmap_flip_key in data:
+            heatmap = data[heatmap_flip_key]
+            logger.info(f"Usando heatmap con resolución de flip para team {team_id}")
+        elif heatmap_key in data:
+            heatmap = data[heatmap_key]
+            logger.info(f"Usando heatmap clásico para team {team_id}")
+        else:
+            logger.error(f"Claves de heatmap no encontradas. Claves disponibles: {list(data.keys())}")
             return JSONResponse({"success": False, "error": f"Heatmap para team {team_id} no encontrado"}, status_code=404)
         
-        heatmap = data[heatmap_key]
         logger.info(f"Heatmap cargado para team {team_id}, shape: {heatmap.shape}, sum={heatmap.sum():.2f}")
         
         # Validar que haya datos

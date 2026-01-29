@@ -26,6 +26,17 @@ from modules.field_calibrator_keypoints import FieldCalibratorKeypoints
 from modules.field_model import FieldModel, FieldDimensions, ZoneModel
 from modules.spatial_possession_tracker import SpatialPossessionTracker
 
+# Sistema de heatmaps con resolución de flip
+from modules.field_heatmap_system import (
+    FIELD_POINTS,
+    FIELD_LENGTH,
+    FIELD_WIDTH,
+    HeatmapAccumulator,
+    estimate_homography_with_flip_resolution,
+    project_points,
+    project_points_by_triangulation
+)
+
 # Jerarquía de prioridad de keypoints (mayor = más fiable)
 # Basada en las 15 clases del modelo field_kp_merged_fast
 KEYPOINT_PRIORITY = {
@@ -281,12 +292,23 @@ class BatchProcessor:
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
+            
+            # Inicializar acumulador de heatmaps con resolución de flip
+            heatmap_res = self.spatial_params['heatmap_resolution']
+            self.heatmap_accumulator = HeatmapAccumulator(
+                field_length=105.0,
+                field_width=68.0,
+                nx=heatmap_res[0],
+                ny=heatmap_res[1]
+            )
+            print(f"  - Acumulador de heatmaps: {heatmap_res[0]}x{heatmap_res[1]} celdas")
         else:
             self.keypoints_detector = None
             self.field_model_keypoints = None
             self.field_calibrator = None
             self.field_calibrator_keypoints = None
             self.spatial_tracker = None
+            self.heatmap_accumulator = None
             self.use_keypoints = False
     
     def save_modules_state(self, match_state: MatchState):
@@ -490,6 +512,13 @@ class BatchProcessor:
         player_positions = []
         events = []
         
+        # Acumulador de posiciones para heatmap (posiciones medias por ID en el batch)
+        player_positions_accumulator = {}  # {track_id: {'team_id': int, 'positions': [(x,y), ...]}}
+        best_homography_batch = None
+        best_homography_is_flipped = False
+        best_homography_num_kp = 0  # Número de keypoints de la mejor homografía
+        best_frame_keypoints = None  # Keypoints del frame con mejor homografía
+        
         # Procesar cada frame del chunk
         current_keypoints = None
         for i, frame in enumerate(frames):
@@ -648,6 +677,61 @@ class BatchProcessor:
                         if frame_idx % 60 == 0:
                             print(f"[Calibración] ✗ Frame {frame_idx}: {e}")
                 
+                # Acumular posiciones en píxeles durante el batch (proyección al final)
+                if self.heatmap_accumulator is not None and current_keypoints:
+                    try:
+                        # Convertir formato de keypoints al esperado por el sistema
+                        frame_keypoints = [
+                            {"cls_name": name, "xy": coords, "conf": 0.9}
+                            for name, coords in current_keypoints.items()
+                        ]
+                        
+                        # Estimar homografía con resolución de flip (guardar mejor del batch)
+                        H, is_flipped = estimate_homography_with_flip_resolution(
+                            frame_keypoints,
+                            FIELD_POINTS,
+                            min_points=3,
+                            conf_threshold=0.3
+                        )
+                        
+                        # Guardar mejor homografía del batch (la que tenga más keypoints)
+                        if H is not None:
+                            num_keypoints_current = len(frame_keypoints)
+                            if best_homography_batch is None:
+                                best_homography_batch = H
+                                best_homography_is_flipped = is_flipped
+                                best_homography_num_kp = num_keypoints_current
+                                best_frame_keypoints = frame_keypoints  # Guardar keypoints también
+                            elif num_keypoints_current > best_homography_num_kp:
+                                # Actualizar si esta homografía tiene más keypoints (más confiable)
+                                best_homography_batch = H
+                                best_homography_is_flipped = is_flipped
+                                best_homography_num_kp = num_keypoints_current
+                                best_frame_keypoints = frame_keypoints
+                        
+                        # Acumular posiciones en píxeles por ID (no proyectar aún)
+                        for obj in tracked_objects:
+                            if obj['class_name'] == 'player' and obj.get('team_id', -1) >= 0:
+                                track_id = obj['track_id']
+                                team_id = obj['team_id']
+                                bbox = obj['bbox']
+                                center_x = (bbox[0] + bbox[2]) / 2
+                                center_y = (bbox[1] + bbox[3]) / 2
+                                
+                                # Inicializar acumulador para este ID si no existe
+                                if track_id not in player_positions_accumulator:
+                                    player_positions_accumulator[track_id] = {
+                                        'team_id': team_id,
+                                        'positions': []
+                                    }
+                                
+                                # Acumular posición en píxeles
+                                player_positions_accumulator[track_id]['positions'].append((center_x, center_y))
+                    
+                    except Exception as e:
+                        if frame_idx % 60 == 0:
+                            print(f"[Heatmap] Error frame {frame_idx}: {e}")
+                
                 # Actualizar tracker espacial
                 spatial_state = self.spatial_tracker.update(
                     ball_pos=ball_bbox[:2] if ball_bbox is not None else None,
@@ -722,6 +806,130 @@ class BatchProcessor:
                         pos_data['zone_id'] = spatial_info.get('zone_id', -1)
                     
                     player_positions.append(pos_data)
+        
+        # ====================================================================
+        # PROYECCIÓN DE POSICIONES MEDIAS AL HEATMAP (al final del batch)
+        # MÉTODO: TRIANGULACIÓN GEOMÉTRICA (más preciso que homografía)
+        # ====================================================================
+        if self.heatmap_accumulator is not None and best_frame_keypoints is not None and player_positions_accumulator:
+            try:
+                # Calcular posición media en píxeles por cada ID
+                player_dets_avg = []
+                pixel_positions_avg = []
+                player_ids_avg = []
+                
+                for track_id, data in player_positions_accumulator.items():
+                    positions = np.array(data['positions'])
+                    # Posición media en píxeles durante el batch
+                    avg_x = np.mean(positions[:, 0])
+                    avg_y = np.mean(positions[:, 1])
+                    
+                    player_dets_avg.append({
+                        'team_id': data['team_id'],
+                        'xy': (avg_x, avg_y),
+                        'conf': 0.9
+                    })
+                    pixel_positions_avg.append((avg_x, avg_y))
+                    player_ids_avg.append(track_id)
+                
+                # PROYECTAR usando TRIANGULACIÓN (más preciso que homografía)
+                if player_dets_avg:
+                    # Proyectar posiciones con triangulación geométrica
+                    field_coords_triangulation = project_points_by_triangulation(
+                        pixel_positions_avg,
+                        best_frame_keypoints,
+                        FIELD_POINTS,
+                        best_homography_is_flipped,
+                        min_references=1,  # Permitir proyección con 1 keypoint para videos difíciles
+                        max_references=4
+                    )
+                    
+                    # Convertir a formato para heatmap (filtrar NaN)
+                    valid_players = []
+                    for i, field_pos in enumerate(field_coords_triangulation):
+                        if not np.isnan(field_pos).any():
+                            valid_players.append({
+                                'team_id': player_dets_avg[i]['team_id'],
+                                'xy': tuple(field_pos),
+                                'conf': 0.9
+                            })
+                    
+                    # Acumular en heatmap
+                    if valid_players:
+                        # Crear posiciones para HeatmapAccumulator (necesita homografía dummy)
+                        # En realidad vamos a modificar para pasar directamente coordenadas de campo
+                        for player in valid_players:
+                            # Agregar directamente al grid del heatmap
+                            team_id = player['team_id']
+                            x_field, y_field = player['xy']
+                            
+                            # Convertir a índices de grid
+                            ix = int(x_field / FIELD_LENGTH * self.heatmap_accumulator.nx)
+                            iy = int(y_field / FIELD_WIDTH * self.heatmap_accumulator.ny)
+                            
+                            # Clipping
+                            ix = np.clip(ix, 0, self.heatmap_accumulator.nx - 1)
+                            iy = np.clip(iy, 0, self.heatmap_accumulator.ny - 1)
+                            
+                            # Acumular
+                            if team_id == 0:
+                                self.heatmap_accumulator.grid_0[iy, ix] += 1
+                                self.heatmap_accumulator.num_frames_0 += 1
+                            elif team_id == 1:
+                                self.heatmap_accumulator.grid_1[iy, ix] += 1
+                                self.heatmap_accumulator.num_frames_1 += 1
+                        
+                        self.heatmap_accumulator.num_frames += 1
+                    
+                    # DEBUG: Imprimir posiciones medias del batch cada 200 frames
+                    if start_frame_idx % 200 == 0 and len(valid_players) > 0:
+                        print(f"\n{'='*70}")
+                        print(f"[Batch {batch_idx}] Posiciones MEDIAS por TRIANGULACIÓN")
+                        print(f"  Frames: {start_frame_idx}-{start_frame_idx + len(frames) - 1}")
+                        print(f"{'='*70}")
+                        print(f"Sistema de referencia:")
+                        print(f"  X = Longitudinal (0-{FIELD_LENGTH}m, línea gol izq→der)")
+                        print(f"  Y = Lateral (0-{FIELD_WIDTH}m, banda abajo→arriba)")
+                        print(f"  Centro campo = ({FIELD_LENGTH/2:.1f}, {FIELD_WIDTH/2:.1f})m")
+                        print(f"  Flip detectado: {best_homography_is_flipped}")
+                        print(f"  Keypoints usados: {len(best_frame_keypoints)}")
+                        print(f"\nJugadores válidos: {len(valid_players)}/{len(player_dets_avg)}")
+                        print(f"{'-'*70}")
+                        
+                        for i, field_pos in enumerate(field_coords_triangulation):
+                            if not np.isnan(field_pos).any():
+                                track_id = player_ids_avg[i]
+                                team_name = f"Team {player_dets_avg[i]['team_id']}"
+                                x_field, y_field = field_pos[0], field_pos[1]
+                                x_pixel, y_pixel = pixel_positions_avg[i]
+                                num_frames = len(player_positions_accumulator[track_id]['positions'])
+                                
+                                # Zona aproximada
+                                if x_field < FIELD_LENGTH / 3:
+                                    zone_x = "Defensa"
+                                elif x_field < 2 * FIELD_LENGTH / 3:
+                                    zone_x = "Mediocampo"
+                                else:
+                                    zone_x = "Ataque"
+                                
+                                if y_field < FIELD_WIDTH / 3:
+                                    zone_y = "Derecha"
+                                elif y_field < 2 * FIELD_WIDTH / 3:
+                                    zone_y = "Centro"
+                                else:
+                                    zone_y = "Izquierda"
+                                
+                                print(f"  ID #{track_id} ({team_name}) [{num_frames} frames]:")
+                                print(f"    Píxeles: ({x_pixel:.0f}, {y_pixel:.0f})")
+                                print(f"    Campo: X={x_field:.2f}m, Y={y_field:.2f}m")
+                                print(f"    Zona: {zone_x} - {zone_y}")
+                        
+                        print(f"{'='*70}\n")
+            
+            except Exception as e:
+                import traceback
+                print(f"[Heatmap] Error proyectando por triangulación: {e}")
+                traceback.print_exc()
         
         # Actualizar estado del partido
         end_frame_idx = start_frame_idx + len(frames) - 1
@@ -946,7 +1154,7 @@ def export_spatial_heatmaps(processor: BatchProcessor,
                 team = tc.cluster_to_team.get(i, -1)
                 print(f"    Cluster {i} (Team {team}): {center}")
     
-    # Exportar heatmaps
+    # Exportar heatmaps del sistema clásico
     heatmap_0 = processor.spatial_tracker.export_heatmap(team_id=0, normalize=True)
     heatmap_1 = processor.spatial_tracker.export_heatmap(team_id=1, normalize=True)
     
@@ -958,26 +1166,44 @@ def export_spatial_heatmaps(processor: BatchProcessor,
     print(f"[Heatmaps] Team 0: shape={heatmap_0.shape}, sum={heatmap_0.sum():.2f}, max={heatmap_0.max():.2f}")
     print(f"[Heatmaps] Team 1: shape={heatmap_1.shape}, sum={heatmap_1.sum():.2f}, max={heatmap_1.max():.2f}")
     
+    # Exportar heatmaps del nuevo sistema con resolución de flip (si está disponible)
+    heatmap_flip_0 = None
+    heatmap_flip_1 = None
+    if hasattr(processor, 'heatmap_accumulator') and processor.heatmap_accumulator is not None:
+        heatmap_flip_0 = processor.heatmap_accumulator.get_heatmap(0, normalize='max')
+        heatmap_flip_1 = processor.heatmap_accumulator.get_heatmap(1, normalize='max')
+        
+        print(f"[Heatmaps Flip] Team 0: shape={heatmap_flip_0.shape}, sum={heatmap_flip_0.sum():.2f}, max={heatmap_flip_0.max():.2f}")
+        print(f"[Heatmaps Flip] Team 1: shape={heatmap_flip_1.shape}, sum={heatmap_flip_1.sum():.2f}, max={heatmap_flip_1.max():.2f}")
+        print(f"[Heatmaps Flip] Frames procesados: {processor.heatmap_accumulator.num_frames}")
+    
     # Obtener estadísticas espaciales
     spatial_stats = processor.spatial_tracker.get_spatial_statistics()
     zone_stats = processor.spatial_tracker.get_zone_statistics()
     
     # Guardar en formato NPZ
-    np.savez(
-        output_path,
-        team_0_heatmap=heatmap_0,
-        team_1_heatmap=heatmap_1,
-        possession_by_zone_team_0=spatial_stats['possession_by_zone'][0],
-        possession_by_zone_team_1=spatial_stats['possession_by_zone'][1],
-        zone_percentages_team_0=spatial_stats['zone_percentages'][0],
-        zone_percentages_team_1=spatial_stats['zone_percentages'][1],
-        metadata={
+    save_data = {
+        'team_0_heatmap': heatmap_0,
+        'team_1_heatmap': heatmap_1,
+        'possession_by_zone_team_0': spatial_stats['possession_by_zone'][0],
+        'possession_by_zone_team_1': spatial_stats['possession_by_zone'][1],
+        'zone_percentages_team_0': spatial_stats['zone_percentages'][0],
+        'zone_percentages_team_1': spatial_stats['zone_percentages'][1],
+        'metadata': {
             'resolution': processor.spatial_params['heatmap_resolution'],
             'partition_type': zone_stats['partition_type'],
             'num_zones': zone_stats['num_zones'],
             'field_dims': (105.0, 68.0)  # Dimensiones del campo en metros
         }
-    )
+    }
+    
+    # Agregar heatmaps con resolución de flip si están disponibles
+    if heatmap_flip_0 is not None and heatmap_flip_1 is not None:
+        save_data['team_0_heatmap_flip'] = heatmap_flip_0
+        save_data['team_1_heatmap_flip'] = heatmap_flip_1
+        save_data['heatmap_flip_frames'] = processor.heatmap_accumulator.num_frames
+    
+    np.savez(output_path, **save_data)
     
     print(f"✓ Heatmaps guardados en: {output_path}")
     return True
