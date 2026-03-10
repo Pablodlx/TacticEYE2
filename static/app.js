@@ -5,6 +5,11 @@ let possessionChart = null;
 let passesChart = null;
 let timelineChart = null;
 
+// Estado del chatbot de alertas
+let chatbotOpen = false;
+let unreadAlerts = 0;
+let alertHistory = [];
+
 // Función para reiniciar la interfaz
 function resetInterface() {
     // Cerrar WebSocket si existe
@@ -71,6 +76,15 @@ function resetInterface() {
     
     const totalFrames = document.getElementById('total-frames');
     if (totalFrames) totalFrames.textContent = '0';
+    
+    // Ocultar y resetear chatbot
+    const chatbot = document.getElementById('alert-chatbot');
+    const toggleBtn = document.getElementById('chatbot-toggle-btn');
+    if (chatbot) chatbot.style.display = 'none';
+    if (toggleBtn) toggleBtn.style.display = 'none';
+    chatbotOpen = false;
+    unreadAlerts = 0;
+    alertHistory = [];
     
     console.log('Interface reset - ready for new analysis');
 }
@@ -214,6 +228,9 @@ async function analyzeFromUrl() {
             // Mostrar sección de progreso
             document.getElementById('upload-section').style.display = 'none';
             document.getElementById('progress-section').style.display = 'block';
+            
+            // Inicializar chatbot de alertas
+            initializeChatbot();
         } else {
             statusDiv.innerHTML = `<div class="alert alert-danger"><i class="fas fa-exclamation-circle me-2"></i>Error: ${data.error}</div>`;
         }
@@ -312,6 +329,8 @@ function handleWebSocketMessage(data) {
         updateVideoFrame(data);
     } else if (data.type === 'batch_complete') {
         updateBatchComplete(data);
+    } else if (data.type === 'alert') {
+        handleAlert(data.alert);
     } else if (data.type === 'completed') {
         stopHeatmapUpdates();
         showResults(data.stats);
@@ -362,6 +381,9 @@ function updateVideoFrame(data) {
 async function startAnalysis() {
     document.getElementById('upload-section').style.display = 'none';
     document.getElementById('progress-section').style.display = 'block';
+    
+    // Inicializar chatbot de alertas
+    initializeChatbot();
     
     try {
         const response = await fetch(`/api/analyze/${currentSessionId}`, {
@@ -958,4 +980,154 @@ function showHeatmapSummary() {
     // Mostrar modal
     const modal = new bootstrap.Modal(document.getElementById('heatmapSummaryModal'));
     modal.show();
+}
+
+// ====================
+// Chatbot de Alertas Tácticas
+// ====================
+
+function handleAlert(alert) {
+    console.log('Nueva alerta recibida:', alert);
+    
+    // Añadir a historial
+    alertHistory.push(alert);
+    
+    // Mostrar el chatbot si está oculto
+    const chatbot = document.getElementById('alert-chatbot');
+    const toggleBtn = document.getElementById('chatbot-toggle-btn');
+    
+    if (chatbot.style.display === 'none') {
+        chatbot.style.display = 'flex';
+        toggleBtn.style.display = 'flex';
+    }
+    
+    // Si el chatbot está minimizado, incrementar contador
+    if (!chatbotOpen) {
+        unreadAlerts++;
+        updateChatbotBadge();
+    }
+    
+    // Añadir mensaje al chatbot
+    addAlertToChatbot(alert);
+    
+    // Auto-scroll al final
+    const chatbotBody = document.getElementById('chatbot-messages');
+    setTimeout(() => {
+        chatbotBody.scrollTop = chatbotBody.scrollHeight;
+    }, 100);
+}
+
+function addAlertToChatbot(alert) {
+    const chatbotMessages = document.getElementById('chatbot-messages');
+    
+    // Mapear severidad a clase CSS
+    const severityClass = alert.severity || 'info';
+    
+    // Mapear tipo a icono
+    const iconMap = {
+        'possession': 'fa-futbol',
+        'passing': 'fa-shoe-prints',
+        'zone': 'fa-map-marker-alt',
+        'tactical': 'fa-chess',
+        'warning': 'fa-exclamation-triangle'
+    };
+    const icon = iconMap[alert.type] || 'fa-info-circle';
+    
+    // Formatear timestamp
+    const date = new Date(alert.timestamp * 1000);
+    const timeStr = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    // Crear elemento de alerta
+    const alertElement = document.createElement('div');
+    alertElement.className = `alert-message ${severityClass}`;
+    alertElement.innerHTML = `
+        <div class="alert-icon">
+            <i class="fas ${icon}"></i>
+        </div>
+        <div class="alert-content">
+            <div class="alert-title">${alert.title}</div>
+            <div class="alert-text">${alert.message}</div>
+            <div class="alert-timestamp">
+                <i class="fas fa-clock"></i> ${timeStr} | Frame ${alert.frame_id}
+            </div>
+        </div>
+    `;
+    
+    chatbotMessages.appendChild(alertElement);
+    
+    // Limitar a 50 alertas en el DOM (performance)
+    const messages = chatbotMessages.querySelectorAll('.alert-message:not(.welcome-message .alert-message)');
+    if (messages.length > 50) {
+        messages[0].remove();
+    }
+}
+
+function toggleChatbot() {
+    const chatbot = document.getElementById('alert-chatbot');
+    const toggleBtn = document.getElementById('chatbot-toggle-btn');
+    
+    if (chatbotOpen) {
+        // Minimizar
+        chatbot.style.display = 'none';
+        toggleBtn.style.display = 'flex';
+        chatbotOpen = false;
+    } else {
+        // Abrir
+        chatbot.style.display = 'flex';
+        toggleBtn.style.display = 'none';
+        chatbotOpen = true;
+        
+        // Resetear contador de no leídas
+        unreadAlerts = 0;
+        updateChatbotBadge();
+    }
+}
+
+function updateChatbotBadge() {
+    const badge = document.getElementById('chatbot-badge');
+    if (unreadAlerts > 0) {
+        badge.textContent = unreadAlerts;
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+function clearAlerts() {
+    if (confirm('¿Estás seguro de que quieres borrar todas las alertas?')) {
+        const chatbotMessages = document.getElementById('chatbot-messages');
+        // Mantener solo el mensaje de bienvenida
+        const welcomeMsg = chatbotMessages.querySelector('.welcome-message');
+        chatbotMessages.innerHTML = '';
+        if (welcomeMsg) {
+            chatbotMessages.appendChild(welcomeMsg);
+        }
+        alertHistory = [];
+        unreadAlerts = 0;
+        updateChatbotBadge();
+    }
+}
+
+// Iniciar chatbot cuando comienza el análisis
+function initializeChatbot() {
+    const chatbot = document.getElementById('alert-chatbot');
+    const toggleBtn = document.getElementById('chatbot-toggle-btn');
+    
+    // Mostrar el chatbot al inicio
+    chatbot.style.display = 'flex';
+    toggleBtn.style.display = 'none';
+    chatbotOpen = true;
+    
+    // Resetear estado
+    alertHistory = [];
+    unreadAlerts = 0;
+    updateChatbotBadge();
+    
+    // Limpiar mensajes anteriores (mantener welcome)
+    const chatbotMessages = document.getElementById('chatbot-messages');
+    const welcomeMsg = chatbotMessages.querySelector('.welcome-message');
+    chatbotMessages.innerHTML = '';
+    if (welcomeMsg) {
+        chatbotMessages.appendChild(welcomeMsg);
+    }
 }

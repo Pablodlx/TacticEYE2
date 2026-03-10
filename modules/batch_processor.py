@@ -18,6 +18,7 @@ from modules.reid_tracker import ReIDTracker
 from modules.team_classifier_v2 import TeamClassifierV2
 from modules.possession_tracker_v2 import PossessionTrackerV2
 from modules.match_state import MatchState, TrackerState, TeamClassifierState, PossessionState
+from modules.match_alert_system import MatchAlertSystem
 
 # Imports de módulos de calibración y tracking espacial
 from modules.field_keypoints_yolo import FieldKeypointsYOLO
@@ -186,6 +187,12 @@ class BatchProcessor:
         # Módulos de calibración espacial
         self.field_calibrator: Optional[FieldCalibrator] = None
         self.spatial_tracker: Optional[SpatialPossessionTracker] = None
+        
+        # Sistema de alertas tácticas
+        self.alert_system: Optional[MatchAlertSystem] = None
+        
+        # Sistema de alertas tácticas
+        self.alert_system: Optional[MatchAlertSystem] = None
     
     def initialize_modules(self, match_state: MatchState):
         """
@@ -230,6 +237,14 @@ class BatchProcessor:
         self.possession_tracker.current_possession_player = match_state.possession_state.current_player
         self.possession_tracker.total_frames_by_team = match_state.possession_state.frames_by_team.copy()
         self.possession_tracker.passes_by_team = match_state.possession_state.passes_by_team.copy()
+        
+        # 4. Sistema de alertas tácticas
+        self.alert_system = MatchAlertSystem(
+            fps=match_state.fps or 30.0,
+            check_interval_seconds=60.0,  # Chequear cada minuto
+            min_alert_interval_seconds=10.0  # Permitir alertas cada 10 segundos
+        )
+        print("✓ Sistema de alertas tácticas inicializado (chequeo cada 60s)")
         
         # 4. Calibración de campo y tracking espacial
         if self.enable_spatial_tracking:
@@ -952,6 +967,40 @@ class BatchProcessor:
             
             # No incluir heatmaps en chunk_stats (son muy grandes)
             # Se exportarán al final del análisis
+        
+        # Generar alertas tácticas
+        alerts = []
+        if self.alert_system is not None:
+            try:
+                # Preparar estadísticas de posesión para el sistema de alertas
+                possession_stats_for_alerts = {
+                    'frames_by_team': self.possession_tracker.total_frames_by_team.copy(),
+                    'passes_by_team': self.possession_tracker.passes_by_team.copy(),
+                    'current_team': self.possession_tracker.current_possession_team,
+                    # Total acumulado de cambios de posesión (nº de segmentos en el timeline)
+                    'possession_changes': len(self.possession_tracker.possession_timeline)
+                }
+                
+                # Añadir estadísticas espaciales si están disponibles
+                spatial_stats_for_alerts = None
+                if self.enable_spatial_tracking and self.spatial_tracker is not None:
+                    spatial_stats_for_alerts = spatial_stats
+                
+                # Generar alertas (frame_id es el argumento correcto)
+                alerts = self.alert_system.analyze_and_generate_alerts(
+                    frame_id=end_frame_idx,
+                    possession_stats=possession_stats_for_alerts,
+                    spatial_stats=spatial_stats_for_alerts
+                )
+                
+                # Agregar alertas al chunk_stats
+                if alerts:
+                    chunk_stats['alerts'] = [alert.to_dict() for alert in alerts]
+                    print(f"[Alertas] {len(alerts)} alertas generadas en frame {end_frame_idx}")
+            except Exception as e:
+                import traceback
+                print(f"[Alertas] Error generando alertas: {e}")
+                traceback.print_exc()
         
         processing_time_ms = (time.time() - start_time) * 1000
         

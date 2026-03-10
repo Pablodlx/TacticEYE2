@@ -1,0 +1,118 @@
+{
+  "batch_idx": 140,
+  "start_frame": 10500,
+  "end_frame": 10574,
+  "chunk_stats": {
+    "frames_processed": 75,
+    "detections_count": 128,
+    "events_count": 0,
+    "possession_team": 0,
+    "possession_player": 10,
+    "spatial": {
+      "calibration_valid": true,
+      "possession_by_zone": {
+        "0": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "1": [
+          79,
+          241,
+          314,
+          37,
+          37,
+          4,
+          0,
+          0,
+          0
+        ]
+      },
+      "zone_percentages": {
+        "0": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "1": [
+          11.095505617977528,
+          33.848314606741575,
+          44.10112359550562,
+          5.196629213483146,
+          5.196629213483146,
+          0.5617977528089888,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "zone_partition_type": "thirds_lanes",
+      "num_zones": 9
+    },
+    "alerts": [
+      {
+        "id": "alert_20_1772613554",
+        "timestamp": 1772613554.050762,
+        "frame_id": 10574,
+        "type": "passing",
+        "severity": "warning",
+        "title": "\ud83d\udd34 Equipo 1 sin pases fluidos",
+        "message": "El Equipo 1 lleva 30 segundos con menos de 4 pases completados. Perdiendo control del bal\u00f3n.",
+        "team_id": 1,
+        "data": {
+          "passes_in_period": 0,
+          "period_seconds": 30.0
+        }
+      },
+      {
+        "id": "alert_21_1772613554",
+        "timestamp": 1772613554.0507748,
+        "frame_id": 10574,
+        "type": "tactical",
+        "severity": "info",
+        "title": "\ud83c\udfaf Juego controlado",
+        "message": "Solo 0.2 cambios de posesi\u00f3n por minuto. Un equipo est\u00e1 controlando claramente el ritmo.",
+        "team_id": null,
+        "data": {
+          "changes_per_minute": 0.17293059718699563,
+          "total_changes": 1
+        }
+      },
+      {
+        "id": "alert_22_1772613554",
+        "timestamp": 1772613554.050787,
+        "frame_id": 10574,
+        "type": "tactical",
+        "severity": "info",
+        "title": "\ud83d\udccb Resumen - Minuto 7",
+        "message": "\u23f1\ufe0f Minuto 7:02\n\ud83d\udcca Posesi\u00f3n equilibrada: 53.7% vs 46.3%\n\u26bd Pases: Equipo 0 (54) vs Equipo 1 (1)\n\ud83c\udfaf Equipo 0 con mejor circulaci\u00f3n de bal\u00f3n",
+        "team_id": null,
+        "data": {
+          "time_minutes": 7,
+          "possession_percent": {
+            "0": 53.70071477980171,
+            "1": 46.29928522019829,
+            "-1": 0.0
+          },
+          "passes": {
+            "0": 54,
+            "1": 1
+          }
+        }
+      }
+    ]
+  },
+  "processing_time_ms": 2002.976894378662
+}

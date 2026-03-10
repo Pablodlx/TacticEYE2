@@ -507,6 +507,48 @@
         </div>
     </div>
     
+    <!-- Tactical Alert Chatbot -->
+    <div id="alert-chatbot" class="alert-chatbot" style="display: none;">
+        <div class="chatbot-header">
+            <div class="d-flex align-items-center justify-content-between">
+                <div>
+                    <i class="fas fa-brain me-2"></i>
+                    <strong>Tactical Insights</strong>
+                </div>
+                <div>
+                    <button class="btn btn-sm btn-link text-white p-0 me-2" onclick="clearAlerts()" title="Clear alerts">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                    <button class="btn btn-sm btn-link text-white p-0" onclick="toggleChatbot()" title="Minimize">
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <div class="chatbot-body" id="chatbot-messages">
+            <div class="welcome-message">
+                <div class="alert-message info">
+                    <div class="alert-icon"><i class="fas fa-robot"></i></div>
+                    <div class="alert-content">
+                        <div class="alert-title">Welcome to Tactical Analysis</div>
+                        <div class="alert-text">I'll monitor the match and alert you about important tactical patterns, possession trends, and key moments.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="chatbot-footer">
+            <small class="text-muted">
+                <i class="fas fa-lightbulb"></i> Real-time AI analysis
+            </small>
+        </div>
+    </div>
+    
+    <!-- Chatbot Toggle Button (shows when minimized) -->
+    <button id="chatbot-toggle-btn" class="chatbot-toggle-btn" onclick="toggleChatbot()" style="display: none;">
+        <i class="fas fa-comments"></i>
+        <span class="badge bg-danger" id="chatbot-badge" style="display: none;">0</span>
+    </button>
+    
     <!-- Modal para resumen de heatmaps -->
     <div class="modal fade" id="heatmapSummaryModal" tabindex="-1">
         <div class="modal-dialog modal-xl">

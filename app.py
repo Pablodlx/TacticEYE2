@@ -821,6 +821,7 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                 # Estadísticas espaciales
                 spatial_stats = chunk_stats.get('spatial', {})
                 
+                # Enviar estadísticas del batch
                 loop.run_until_complete(manager.send_update(session_id, {
                     "type": "batch_complete",
                     "batch_idx": batch_idx,
@@ -846,6 +847,15 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                     },
                     "message": f"✓ Batch {batch_idx + 1} completado: Team 0: {possession_percent[0]:.1f}%, Team 1: {possession_percent[1]:.1f}%"
                 }))
+                
+                # Enviar alertas si existen
+                alerts = chunk_stats.get('alerts', [])
+                if alerts:
+                    for alert in alerts:
+                        loop.run_until_complete(manager.send_update(session_id, {
+                            "type": "alert",
+                            "alert": alert
+                        }))
             except Exception as e:
                 print(f"Error en on_batch_complete: {e}")
                 import traceback
