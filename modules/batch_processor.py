@@ -137,7 +137,9 @@ class BatchProcessor:
         zone_nx: int = 6,
         zone_ny: int = 4,
         enable_heatmaps: bool = True,
-        heatmap_resolution: Tuple[int, int] = (50, 34)
+        heatmap_resolution: Tuple[int, int] = (50, 34),
+        # Optimización: Optical Flow deshabilidado por defecto (toma 390ms/frame)
+        enable_optical_flow: bool = False
     ):
         """
         Inicializa el procesador de batches.
@@ -176,6 +178,7 @@ class BatchProcessor:
         
         # Parámetros de calibración espacial
         self.enable_spatial_tracking = enable_spatial_tracking
+        self.enable_optical_flow = enable_optical_flow  # NEW: Optical flow optimization flag
         self.spatial_params = {
             'zone_partition_type': zone_partition_type,
             'zone_nx': zone_nx,
@@ -311,13 +314,24 @@ class BatchProcessor:
 
             # NEW: Inicializar optical flow tracker y position smoother
             fps = getattr(match_state, 'fps', 30.0) or 30.0
-            self.optical_flow_tracker = OpticalFlowTracker(fps=fps)
+
+            # Optical Flow: DESHABILITADO por defecto (consume 390ms/frame)
+            # Solo activar si enable_optical_flow=True
+            if self.enable_optical_flow:
+                self.optical_flow_tracker = OpticalFlowTracker(fps=fps)
+                self.camera_motion_detector = CameraMotionDetector()
+                print(f"  - Optical Flow Tracker: ✓ Activado (⚠ +390ms/frame)")
+            else:
+                self.optical_flow_tracker = None
+                self.camera_motion_detector = None
+                print(f"  - Optical Flow Tracker: ✗ Desactivado (para rendimiento)")
+
+            # Kalman smoothing: Siempre habilitado (es muy rápido)
             self.position_smoother = KalmanFilterPositionSmoother()
-            self.camera_motion_detector = CameraMotionDetector()
             self.trajectory_validator = TrajectoryValidator(fps=fps)
 
-            print(f"  - Optical Flow Tracker: Activado")
-            print(f"  - Position Smoother (Kalman Filter): Activado")
+            print(f"  - Position Smoother (Kalman Filter): ✓ Activado")
+            print(f"  - Trajectory Validator: ✓ Activado")
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
@@ -742,15 +756,18 @@ class BatchProcessor:
                                 center_x = (bbox[0] + bbox[2]) / 2
                                 center_y = (bbox[1] + bbox[3]) / 2
 
-                                # NEW: Optical flow fallback setup
+                                # NEW: Optical flow fallback setup (ONLY IF ENABLED)
                                 # Obtener pos fallback de optical flow para jugadores que fueron ocluidos
-                                of_fallback = self.optical_flow_tracker.update(
-                                    frame_rgb=frame,
-                                    current_detections_px=[(center_x, center_y)],
-                                    track_ids=[track_id],
-                                    fps=fps
-                                )
-                                of_confidence = self.optical_flow_tracker.get_confidence(track_id)
+                                of_fallback = {}
+                                of_confidence = 0.0
+                                if self.optical_flow_tracker is not None:
+                                    of_fallback = self.optical_flow_tracker.update(
+                                        frame_rgb=frame,
+                                        current_detections_px=[(center_x, center_y)],
+                                        track_ids=[track_id],
+                                        fps=fps
+                                    )
+                                    of_confidence = self.optical_flow_tracker.get_confidence(track_id)
 
                                 # PROYECTAR frame a frame usando keypoints del FRAME ACTUAL (no acumulados)
                                 # Esto evita problemas cuando la cámara cambia de ángulo
