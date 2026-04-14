@@ -771,7 +771,8 @@ class BatchProcessor:
 
                                 # PROYECTAR frame a frame usando keypoints del FRAME ACTUAL (no acumulados)
                                 # Esto evita problemas cuando la cámara cambia de ángulo
-                                if current_keypoints and len(current_keypoints) >= 2:
+                                # SOLO si tenemos suficientes keypoints y el detector está funcionando
+                                if current_keypoints and len(current_keypoints) >= 3:
                                     # Convertir diccionario de keypoints a lista para project_points_by_triangulation
                                     # current_keypoints es {name: (x, y)}, necesitamos [{"cls_name": name, "xy": (x,y), "conf": 1.0}]
                                     current_keypoints_list = [
@@ -808,16 +809,32 @@ class BatchProcessor:
                                                     field_pos = projected
                                                     confidence = 1.0
 
-                                    # NEW: Fallback a optical flow si triangulation falló
-                                    if field_pos is None and track_id in of_fallback:
-                                        of_pos_px = of_fallback[track_id]
-                                        # Proyectar fallback con escala asumida
-                                        scale_px_per_m = 10.0  # Conservative fallback
-                                        field_pos = np.array([
-                                            center_x / scale_px_per_m,
-                                            center_y / scale_px_per_m
-                                        ])
-                                        confidence = of_confidence * 0.8  # Reduce confidence for fallback
+                                    # NEW: Fallback si triangulation falló
+                                    # PRIORIDAD: 1) Optical flow propagation, 2) Homography, 3) Last resort naive scale
+                                    if field_pos is None:
+                                        # Try optical flow first
+                                        if track_id in of_fallback:
+                                            of_pos_px = of_fallback[track_id]
+                                            scale_px_per_m = 10.0  # Conservative fallback
+                                            field_pos = np.array([
+                                                of_pos_px[0] / scale_px_per_m,
+                                                of_pos_px[1] / scale_px_per_m
+                                            ])
+                                            confidence = of_confidence * 0.8  # Reduce confidence for fallback
+
+                                        # If optical flow also failed, try homography on current player position
+                                        if field_pos is None and best_homography_batch is not None:
+                                            try:
+                                                h_projection = project_points(
+                                                    best_homography_batch,
+                                                    np.array([[center_x, center_y]])
+                                                )
+                                                proj = h_projection[0]
+                                                if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
+                                                    field_pos = proj
+                                                    confidence = 0.6  # Reduced confidence for homography fallback
+                                            except Exception as e:
+                                                pass  # Fallback to last resort below
 
                                     # Aplicar Kalman smoothing si tenemos posición
                                     if field_pos is not None:
