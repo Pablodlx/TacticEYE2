@@ -100,7 +100,7 @@ async def index(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 
-MAX_UPLOAD_BYTES = 5000 * 1024 * 1024  # 500 MB
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", 500000)) * 1024 * 1024  # Default: 500 GB (configurable via env)
 ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".ts", ".m4v"}
 
 
