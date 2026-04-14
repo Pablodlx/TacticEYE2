@@ -35,8 +35,13 @@ from modules.field_heatmap_system import (
     HeatmapAccumulator,
     estimate_homography_with_flip_resolution,
     project_points,
-    project_points_by_triangulation
+    project_points_by_triangulation,
+    project_points_with_fallback
 )
+
+# Optical flow y position smoothing (NEW)
+from modules.optical_flow_tracker import OpticalFlowTracker, CameraMotionDetector
+from modules.position_smoother import KalmanFilterPositionSmoother, TrajectoryValidator
 
 # Jerarquía de prioridad de keypoints (mayor = más fiable)
 # Basada en las 15 clases del modelo field_kp_merged_fast
@@ -187,10 +192,11 @@ class BatchProcessor:
         # Módulos de calibración espacial
         self.field_calibrator: Optional[FieldCalibrator] = None
         self.spatial_tracker: Optional[SpatialPossessionTracker] = None
-        
-        # Sistema de alertas tácticas
-        self.alert_system: Optional[MatchAlertSystem] = None
-        
+
+        # Módulos de optical flow y smoothing (NEW)
+        self.optical_flow_tracker: Optional['OpticalFlowTracker'] = None
+        self.position_smoother: Optional['KalmanFilterPositionSmoother'] = None
+
         # Sistema de alertas tácticas
         self.alert_system: Optional[MatchAlertSystem] = None
     
@@ -302,8 +308,16 @@ class BatchProcessor:
                 enable_heatmaps=self.spatial_params['enable_heatmaps'],
                 heatmap_resolution=self.spatial_params['heatmap_resolution']
             )
-            
-            print(f"  - Modo: Keypoints acumulativos (YOLO Custom Model)")
+
+            # NEW: Inicializar optical flow tracker y position smoother
+            fps = getattr(match_state, 'fps', 30.0) or 30.0
+            self.optical_flow_tracker = OpticalFlowTracker(fps=fps)
+            self.position_smoother = KalmanFilterPositionSmoother()
+            self.camera_motion_detector = CameraMotionDetector()
+            self.trajectory_validator = TrajectoryValidator(fps=fps)
+
+            print(f"  - Optical Flow Tracker: Activado")
+            print(f"  - Position Smoother (Kalman Filter): Activado")
             print(f"  - Modelo de zonas: {self.spatial_params['zone_partition_type']}")
             print(f"  - Número de zonas: {zone_model.num_zones}")
             print(f"  - Heatmaps: {'Activados' if self.spatial_params['enable_heatmaps'] else 'Desactivados'}")
@@ -727,7 +741,17 @@ class BatchProcessor:
                                 bbox = obj['bbox']
                                 center_x = (bbox[0] + bbox[2]) / 2
                                 center_y = (bbox[1] + bbox[3]) / 2
-                                
+
+                                # NEW: Optical flow fallback setup
+                                # Obtener pos fallback de optical flow para jugadores que fueron ocluidos
+                                of_fallback = self.optical_flow_tracker.update(
+                                    frame_rgb=frame,
+                                    current_detections_px=[(center_x, center_y)],
+                                    track_ids=[track_id],
+                                    fps=fps
+                                )
+                                of_confidence = self.optical_flow_tracker.get_confidence(track_id)
+
                                 # PROYECTAR frame a frame usando keypoints del FRAME ACTUAL (no acumulados)
                                 # Esto evita problemas cuando la cámara cambia de ángulo
                                 if current_keypoints and len(current_keypoints) >= 2:
@@ -737,7 +761,7 @@ class BatchProcessor:
                                         {"cls_name": name, "xy": coords, "conf": 1.0}
                                         for name, coords in current_keypoints.items()
                                     ]
-                                    
+
                                     # Usar keypoints detectados en este frame específico
                                     pixel_pos = [(center_x, center_y)]
                                     field_coords = project_points_by_triangulation(
@@ -748,22 +772,55 @@ class BatchProcessor:
                                         min_references=2,
                                         max_references=4
                                     )
-                                    
-                                    # Si la proyección es válida, acumular posición de campo
+
+                                    # NEW: Validar proyección y usar fallback si es necesario
+                                    field_pos = None
+                                    confidence = 1.0
+
                                     if field_coords is not None and len(field_coords) > 0:
-                                        field_pos = field_coords[0]
-                                        if not np.isnan(field_pos).any():
-                                            # Inicializar acumulador para este ID si no existe
-                                            if track_id not in player_field_positions_accumulator:
-                                                player_field_positions_accumulator[track_id] = {
-                                                    'team_id': team_id,
-                                                    'field_positions': []
-                                                }
-                                            
-                                            # Acumular posición PROYECTADA (en coordenadas de campo)
-                                            player_field_positions_accumulator[track_id]['field_positions'].append(
-                                                (field_pos[0], field_pos[1])
-                                            )
+                                        projected = field_coords[0]
+
+                                        # Check if valid (not NaN, within field)
+                                        if not np.isnan(projected).any():
+                                            if 0 <= projected[0] <= FIELD_LENGTH and 0 <= projected[1] <= FIELD_WIDTH:
+                                                # Validar físicamente con TrajectoryValidator
+                                                is_valid, _ = self.trajectory_validator.validate(
+                                                    track_id, projected, frame_idx
+                                                )
+                                                if is_valid:
+                                                    field_pos = projected
+                                                    confidence = 1.0
+
+                                    # NEW: Fallback a optical flow si triangulation falló
+                                    if field_pos is None and track_id in of_fallback:
+                                        of_pos_px = of_fallback[track_id]
+                                        # Proyectar fallback con escala asumida
+                                        scale_px_per_m = 10.0  # Conservative fallback
+                                        field_pos = np.array([
+                                            center_x / scale_px_per_m,
+                                            center_y / scale_px_per_m
+                                        ])
+                                        confidence = of_confidence * 0.8  # Reduce confidence for fallback
+
+                                    # Aplicar Kalman smoothing si tenemos posición
+                                    if field_pos is not None:
+                                        field_pos = self.position_smoother.smooth(
+                                            track_id, field_pos, confidence, is_detected=True
+                                        )
+
+                                    # Acumular si es válida
+                                    if field_pos is not None and not np.isnan(field_pos).any():
+                                        # Inicializar acumulador para este ID si no existe
+                                        if track_id not in player_field_positions_accumulator:
+                                            player_field_positions_accumulator[track_id] = {
+                                                'team_id': team_id,
+                                                'field_positions': []
+                                            }
+
+                                        # Acumular posición PROYECTADA (en coordenadas de campo)
+                                        player_field_positions_accumulator[track_id]['field_positions'].append(
+                                            (field_pos[0], field_pos[1])
+                                        )
                     
                     except Exception as e:
                         if frame_idx % 60 == 0:

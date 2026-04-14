@@ -14,6 +14,9 @@ import numpy as np
 import cv2
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -507,7 +510,82 @@ def project_points(H: np.ndarray, points: np.ndarray) -> np.ndarray:
 
 
 # ============================================================================
-# 5. ACUMULADOR DE MAPAS DE CALOR
+# 5. PROYECCIÓN CON FALLBACK (Optical Flow + Validation)
+# ============================================================================
+
+def project_points_with_fallback(
+    H: Optional[np.ndarray],
+    points: np.ndarray,
+    track_ids: List[int],
+    field_coords_fallback: Optional[Dict[int, Tuple[float, float]]] = None,
+    fallback_confidence: float = 0.8,
+    verbose: bool = False
+) -> Tuple[np.ndarray, List[int], List[float]]:
+    """
+    Proyecta puntos con fallback cuando la homografía es poco confiable.
+
+    Intenta proyectar con homografía primero. Si falla o confianza es baja,
+    usa posiciones de fallback (ej. propagadas por optical flow).
+
+    Args:
+        H: Homografía 3x3 (imagen -> campo), puede ser None
+        points: Array Nx2 de (x, y) en píxeles
+        track_ids: IDs de tracking para cada punto
+        field_coords_fallback: Dict mapping track_id -> (X, Y) metros (fallback)
+        fallback_confidence: Confianza asignada a fallback positions (0-1)
+        verbose: Si True, loguea decisiones
+
+    Returns:
+        (field_coords: NxArray2, used_fallback: [bool]*N, confidences: [float]*N)
+    """
+    field_coords = []
+    used_fallback = []
+    confidences = []
+
+    # Si no hay homografía, usar solo fallback
+    if H is None:
+        for point, track_id in zip(points, track_ids):
+            if field_coords_fallback and track_id in field_coords_fallback:
+                field_coords.append(field_coords_fallback[track_id])
+                used_fallback.append(True)
+                confidences.append(fallback_confidence)
+            else:
+                field_coords.append([np.nan, np.nan])
+                used_fallback.append(False)
+                confidences.append(0.0)
+        return np.array(field_coords), used_fallback, confidences
+
+    # Proyectar con H
+    projected_h = project_points(H, points)
+
+    for idx, (point, track_id) in enumerate(zip(points, track_ids)):
+        proj = projected_h[idx]
+
+        # Si proyección es válida (dentro del campo), usar
+        if not np.isnan(proj[0]) and not np.isnan(proj[1]):
+            if 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
+                field_coords.append(proj)
+                used_fallback.append(False)
+                confidences.append(1.0)
+                continue
+
+        # Fallback si proyección falló
+        if field_coords_fallback and track_id in field_coords_fallback:
+            field_coords.append(field_coords_fallback[track_id])
+            used_fallback.append(True)
+            confidences.append(fallback_confidence)
+            if verbose:
+                logger.debug(f"Using fallback for track {track_id}")
+        else:
+            field_coords.append([np.nan, np.nan])
+            used_fallback.append(False)
+            confidences.append(0.0)
+
+    return np.array(field_coords), used_fallback, confidences
+
+
+# ============================================================================
+# 6. ACUMULADOR DE MAPAS DE CALOR
 # ============================================================================
 
 class HeatmapAccumulator:
@@ -583,35 +661,52 @@ class HeatmapAccumulator:
                     self.counts_team1[i, j] += 1
         
         self.num_frames += 1
-    
-    def get_heatmap(self, team_id: int, normalize: str = 'max') -> np.ndarray:
+
+    def add_frame_with_field_coords(
+        self,
+        field_coords: np.ndarray,
+        team_ids: List[int],
+        confidences: Optional[List[float]] = None
+    ):
         """
-        Obtiene el heatmap de un equipo.
-        
+        Añade detecciones ya proyectadas al campo (sin usar homografía).
+
+        Útil para fallback cuando la homografía es poco fiable,
+        permitiendo proyecciones alternativas (ej. optical flow).
+
         Args:
-            team_id: ID del equipo (0 o 1)
-            normalize: Método de normalización:
-                - 'max': Dividir por valor máximo (rango [0, 1])
-                - 'sum': Dividir por suma total (densidad de probabilidad)
-                - 'frames': Dividir por número de frames
-                - None: Sin normalizar
-        
-        Returns:
-            Matriz ny x nx con el heatmap
+            field_coords: Array Nx2 de coordenadas en el campo (X, Y) metros
+            team_ids: Lista de N team_ids
+            confidences: Optional lista de N confianzas (0-1), para pesado
         """
-        counts = self.counts_team0 if team_id == 0 else self.counts_team1
-        
-        if normalize == 'max':
-            max_val = counts.max()
-            return counts / max_val if max_val > 0 else counts
-        elif normalize == 'sum':
-            total = counts.sum()
-            return counts / total if total > 0 else counts
-        elif normalize == 'frames':
-            return counts / self.num_frames if self.num_frames > 0 else counts
-        else:
-            return counts.copy()
-    
+        if len(field_coords) == 0:
+            return
+
+        if confidences is None:
+            confidences = [1.0] * len(field_coords)
+
+        # Acumular en celdas
+        for (X, Y), team_id, conf in zip(field_coords, team_ids, confidences):
+            # Skip invalid projections (NaN)
+            if np.isnan(X) or np.isnan(Y):
+                continue
+
+            # Convertir coordenadas continuas a índices de celda
+            i = int((Y / self.field_width) * self.ny)
+            j = int((X / self.field_length) * self.nx)
+
+            # Validar límites
+            if 0 <= i < self.ny and 0 <= j < self.nx:
+                # Pesar por confianza
+                weight = float(conf)
+
+                if team_id == 0:
+                    self.counts_team0[i, j] += weight
+                elif team_id == 1:
+                    self.counts_team1[i, j] += weight
+
+        self.num_frames += 1
+
     def reset(self):
         """Reinicia los contadores."""
         self.counts_team0.fill(0)
