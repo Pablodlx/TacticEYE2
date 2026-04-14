@@ -1,0 +1,123 @@
+{
+  "batch_idx": 20,
+  "start_frame": 1800,
+  "end_frame": 1889,
+  "chunk_stats": {
+    "frames_processed": 90,
+    "detections_count": 1144,
+    "events_count": 1,
+    "possession_team": 0,
+    "possession_player": 10,
+    "spatial": {
+      "calibration_valid": true,
+      "possession_by_zone": {
+        "0": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "1": [
+          2,
+          123,
+          151,
+          10,
+          42,
+          106,
+          2,
+          0,
+          0
+        ]
+      },
+      "zone_percentages": {
+        "0": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "1": [
+          0.45871559633027525,
+          28.211009174311926,
+          34.63302752293578,
+          2.293577981651376,
+          9.63302752293578,
+          24.31192660550459,
+          0.45871559633027525,
+          0.0,
+          0.0
+        ]
+      },
+      "zone_partition_type": "thirds_lanes",
+      "num_zones": 9
+    },
+    "alerts": [
+      {
+        "id": "alert_1_1776157159",
+        "timestamp": 1776157159.1530423,
+        "frame_id": 1889,
+        "type": "possession",
+        "severity": "warning",
+        "title": "\u26a0\ufe0f Dominio del Equipo 0",
+        "message": "El Equipo 0 domina claramente la posesi\u00f3n con 97.3% vs 2.7% del rival. Considera ajustar la presi\u00f3n.",
+        "team_id": 0,
+        "data": {
+          "possession_team": 97.34299516908213,
+          "possession_opponent": 2.657004830917874,
+          "difference": 94.68599033816426
+        }
+      },
+      {
+        "id": "alert_2_1776157159",
+        "timestamp": 1776157159.1530883,
+        "frame_id": 1889,
+        "type": "zone",
+        "severity": "info",
+        "title": "\ud83d\udccd Concentraci\u00f3n t\u00e1ctica - Equipo 1",
+        "message": "Equipo 1 concentrando su juego en: Zone_2, Zone_1 (63% de la posesi\u00f3n)",
+        "team_id": 1,
+        "data": {
+          "dominant_zones": [
+            "Zone_2",
+            "Zone_1"
+          ],
+          "concentration": 0.628440366972477,
+          "pattern": "focused"
+        }
+      },
+      {
+        "id": "alert_3_1776157159",
+        "timestamp": 1776157159.1536653,
+        "frame_id": 1889,
+        "type": "tactical",
+        "severity": "info",
+        "title": "\ud83d\udccb Resumen - Minuto 1",
+        "message": "\u23f1\ufe0f Minuto 1:02\n\ud83d\udcca Equipo 0 domina: 97.3% vs 2.7%\n\u26bd Pases: Equipo 0 (21) vs Equipo 1 (1)\n\u26a0\ufe0f Control claro del Equipo 0\n\ud83c\udfaf Equipo 0 con mejor circulaci\u00f3n de bal\u00f3n",
+        "team_id": null,
+        "data": {
+          "time_minutes": 1,
+          "possession_percent": {
+            "0": 97.34299516908213,
+            "1": 2.657004830917874,
+            "-1": 0.0
+          },
+          "passes": {
+            "0": 21,
+            "1": 1
+          }
+        }
+      }
+    ]
+  },
+  "processing_time_ms": 5141.691446304321
+}

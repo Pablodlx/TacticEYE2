@@ -5,14 +5,25 @@ Match Alert System - Sistema Inteligente de Alertas Tácticas
 Analiza estadísticas del partido en tiempo real y genera alertas contextuales
 sobre patrones tácticos, posesión, pases, y anomalías del juego.
 
+Versión mejorada con análisis táctico profesional usando Claude API.
+
 Author: TacticEYE2 Team
-Date: 2026-03-03
+Date: 2026-04-14
 """
 
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
+import asyncio
+import logging
+
+try:
+    from modules.tactical_analyzer import TacticalAnalyzer
+except ImportError:
+    TacticalAnalyzer = None
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -21,13 +32,13 @@ class Alert:
     id: str
     timestamp: float
     frame_id: int
-    type: str  # 'possession', 'passing', 'zone', 'tactical', 'warning'
+    type: str  # 'possession', 'passing', 'zone', 'tactical', 'warning', 'zone_concentration', 'passing_chain', 'tactical_shift', 'tactical_excellence'
     severity: str  # 'info', 'warning', 'critical'
     title: str
     message: str
     team_id: Optional[int] = None
     data: Dict = field(default_factory=dict)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -69,17 +80,17 @@ class MatchAlertSystem:
         self.fps = fps
         self.check_interval_frames = int(check_interval_seconds * fps)
         self.min_alert_interval = min_alert_interval_seconds
-        
+
         # Estado interno
         self.last_check_frame: int = 0
         self.alert_counter: int = 0
         self.last_alert_time: Dict[str, float] = {}
-        
+
         # Histórico de estadísticas para análisis temporal
         self.possession_history: List[Tuple[int, Dict[int, float]]] = []
         self.passes_history: List[Tuple[int, Dict[int, int]]] = []
         self.zone_possession_history: List[Tuple[int, Dict]] = []
-        
+
         # Thresholds configurables (más sensibles para alertas frecuentes)
         self.POSSESSION_DOMINANCE_THRESHOLD = 60.0  # % posesión para considerar dominio
         self.LONG_NO_PASS_THRESHOLD_SECONDS = 30.0  # Segundos sin pases
@@ -87,6 +98,21 @@ class MatchAlertSystem:
         self.POSSESSION_SWING_THRESHOLD = 15.0  # Cambio de % para detectar giro de partido
         self.SUMMARY_INTERVAL_SECONDS = 90.0  # Resumen cada 90 segundos
         self.last_summary_time = 0.0
+
+        # === TACTICAL ANALYZER ===
+        if TacticalAnalyzer is not None:
+            self.tactical_analyzer = TacticalAnalyzer(fps=fps)
+            logger.info("✓ Tactical analyzer initialized")
+        else:
+            self.tactical_analyzer = None
+            logger.warning("⚠ Tactical analyzer not available (modules.tactical_analyzer import failed)")
+
+        # Event history for tactical analysis
+        self.event_history: List[Dict] = []
+        self.max_event_history = 50
+
+        # Zone shift detection
+        self.last_zone_analysis: Dict[int, Dict] = {}
         
     def should_check(self, frame_id: int) -> bool:
         """Determina si es momento de evaluar y potencialmente generar alertas"""
@@ -192,8 +218,33 @@ class MatchAlertSystem:
         # === ALERTA 5: Análisis espacial (si disponible) ===
         if spatial_stats:
             alerts.extend(self._check_spatial_pressure(frame_id, spatial_stats, possession_percent))
-        
-        # === ALERTA 6: Resumen periódico del partido (SIEMPRE) ===
+
+        # === ALERTA 6: ANÁLISIS TÁCTICO AVANZADO ===
+        # Detección de patrones tácticos usando TacticalAnalyzer
+        if spatial_stats and self.tactical_analyzer:
+            # Agregar estadísticas de posesión al spatial_stats si no están presentes
+            if 'possession_percent' not in spatial_stats:
+                spatial_stats['possession_percent'] = possession_percent
+
+            # Extraer eventos si están disponibles en spatial_stats
+            events = spatial_stats.get('recent_events', [])
+
+            # Análisis zonal
+            alerts.extend(self._check_zone_dominance_patterns(frame_id, spatial_stats))
+
+            # Análisis de cadenas de pases
+            if events:
+                alerts.extend(self._check_passing_chain_efficiency(frame_id, events))
+
+            # Detección de cambios tácticos
+            alerts.extend(self._check_tactical_shift_detection(frame_id))
+
+            # Generar alerta profesional con análisis (solo en momentos clave)
+            professional_alert = self._generate_professional_alert(frame_id, possession_stats, spatial_stats)
+            if professional_alert:
+                alerts.append(professional_alert)
+
+        # === ALERTA 7: Resumen periódico del partido (SIEMPRE) ===
         # Esta alerta se genera independientemente del intervalo de chequeo
         summary = self._check_periodic_summary(frame_id, possession_stats, possession_percent)
         alerts.extend(summary)
@@ -509,7 +560,247 @@ class MatchAlertSystem:
         alerts.append(alert)
         
         return alerts
-    
+
+    # ============================================================================
+    # TACTICAL ANALYSIS METHODS
+    # ============================================================================
+
+    def _check_zone_dominance_patterns(self, frame_id: int, spatial_stats: Dict) -> List[Alert]:
+        """
+        Detecta patrones de dominio zonal y concentración táctica.
+
+        Genera alertas cuando un equipo concentra su juego en zonas específicas.
+        """
+        alerts = []
+
+        if not self.tactical_analyzer or not spatial_stats:
+            return alerts
+
+        alert_type = "zone_concentration"
+
+        try:
+            # Obtener estadísticas de posesión por zona
+            zone_stats = spatial_stats.get('possession_by_zone', {})
+            if not zone_stats:
+                return alerts
+
+            # Analizar zonas para ambos equipos
+            zone_analysis = self.tactical_analyzer.insight_generator.zone_analyzer.analyze(
+                zone_stats, zone_names={}
+            )
+
+            self.last_zone_analysis = zone_analysis
+
+            # Detectar concentración táctica
+            for team_id in [0, 1]:
+                if team_id not in zone_analysis:
+                    continue
+
+                analysis = zone_analysis[team_id]
+                concentration = analysis.get('concentration', 0)
+                dominant_zones = analysis.get('dominant_zones', [])
+
+                # Alerta si concentración es notable (>60%)
+                if concentration >= 0.60 and len(dominant_zones) <= 3:
+                    # Limitar frecuencia
+                    alert_key = f"{alert_type}_team{team_id}"
+                    if not self.can_send_alert(alert_key):
+                        continue
+
+                    zones_str = ', '.join(dominant_zones) if dominant_zones else "zona central"
+
+                    alert = self._create_alert(
+                        frame_id=frame_id,
+                        alert_type="zone",
+                        severity="info",
+                        title=f"📍 Concentración táctica - Equipo {team_id}",
+                        message=f"Equipo {team_id} concentrando su juego en: {zones_str} ({concentration*100:.0f}% de la posesión)",
+                        team_id=team_id,
+                        data={
+                            'dominant_zones': dominant_zones,
+                            'concentration': concentration,
+                            'pattern': analysis.get('pattern', 'unknown')
+                        }
+                    )
+                    alerts.append(alert)
+                    self._mark_alert_sent(alert_key)
+
+        except Exception as e:
+            logger.error(f"Error en _check_zone_dominance_patterns: {e}")
+
+        return alerts
+
+    def _check_passing_chain_efficiency(self, frame_id: int, events: Optional[List[Dict]] = None) -> List[Alert]:
+        """
+        Detecta cadenas de pases efectivas y las comenta.
+        """
+        alerts = []
+
+        if not self.tactical_analyzer or not events:
+            return alerts
+
+        alert_type = "passing_chain"
+
+        try:
+            # Procesar eventos de pases
+            for event in events:
+                if event.get('type') == 'pass':
+                    self.tactical_analyzer.insight_generator.chain_detector.update(event, self.fps)
+
+            # Revisar cadenas notables
+            for team_id in [0, 1]:
+                notable_chains = self.tactical_analyzer.insight_generator.chain_detector.get_notable_chains(
+                    team_id, min_length=5
+                )
+
+                if notable_chains and self.can_send_alert(f"{alert_type}_team{team_id}"):
+                    best_chain = notable_chains[0]
+
+                    zones_str = ', '.join(best_chain.zones) if best_chain.zones else "zona desconocida"
+
+                    alert = self._create_alert(
+                        frame_id=frame_id,
+                        alert_type="passing",
+                        severity="info",
+                        title=f"⚡ Cadena de pases efectiva - Equipo {team_id}",
+                        message=f"Equipo {team_id} completó una secuencia de {best_chain.length} pases en {zones_str}",
+                        team_id=team_id,
+                        data={
+                            'chain_info': best_chain.to_dict(),
+                            'is_active': best_chain.is_active
+                        }
+                    )
+                    alerts.append(alert)
+                    self._mark_alert_sent(f"{alert_type}_team{team_id}")
+
+        except Exception as e:
+            logger.error(f"Error en _check_passing_chain_efficiency: {e}")
+
+        return alerts
+
+    def _check_tactical_shift_detection(self, frame_id: int) -> List[Alert]:
+        """
+        Detecta cambios tácticos (cambios en el patrón de zonas).
+        """
+        alerts = []
+
+        if not self.tactical_analyzer or not self.last_zone_analysis:
+            return alerts
+
+        alert_type = "tactical_shift"
+
+        try:
+            for team_id in [0, 1]:
+                shift = self.tactical_analyzer.insight_generator.zone_analyzer.detect_zone_shift(team_id)
+
+                if shift and self.can_send_alert(f"{alert_type}_team{team_id}"):
+                    alert = self._create_alert(
+                        frame_id=frame_id,
+                        alert_type="tactical",
+                        severity="info",
+                        title=f"🔄 Cambio táctico - Equipo {team_id}",
+                        message=f"Equipo {team_id} está ajustando su táctica: {shift}",
+                        team_id=team_id,
+                        data={'tactical_shift': shift}
+                    )
+                    alerts.append(alert)
+                    self._mark_alert_sent(f"{alert_type}_team{team_id}")
+
+        except Exception as e:
+            logger.error(f"Error en _check_tactical_shift_detection: {e}")
+
+        return alerts
+
+    def _generate_professional_alert(self, frame_id: int, possession_stats: Dict,
+                                    spatial_stats: Optional[Dict] = None) -> Optional[Alert]:
+        """
+        Genera alerta profesional con análisis usando Claude API.
+
+        Se ejecuta solo en momentos clave para economizar API calls.
+        """
+        if not self.tactical_analyzer or not self.tactical_analyzer.narrative_generator.should_generate():
+            return None
+
+        try:
+            # Obtener contexto
+            possession = possession_stats.get('possession_percent', {}) or {}
+            zones = self.last_zone_analysis or {}
+            chains = {}
+
+            if spatial_stats:
+                for team_id in [0, 1]:
+                    active_chain = self.tactical_analyzer.insight_generator.chain_detector.get_active_chain(team_id)
+                    chains[team_id] = {
+                        'active': active_chain.to_dict() if active_chain else None,
+                        'stats': self.tactical_analyzer.insight_generator.chain_detector.get_chain_stats(team_id)
+                    }
+
+            # Determinar tipo de evento
+            event_type = self._determine_significant_event(possession_stats)
+
+            context = {
+                'possession': possession,
+                'zones': zones,
+                'chains': chains,
+                'event_type': event_type,
+                'time_minutes': int((frame_id / self.fps) / 60)
+            }
+
+            # Llamar a Claude API (será async pero podemos hacer await aquí)
+            # Para compatibilidad con código síncrono, usamos asyncio.run
+            try:
+                narrative = asyncio.run(
+                    self.tactical_analyzer.narrative_generator.generate_narrative(context)
+                )
+            except RuntimeError:
+                # Si ya hay un loop running, usar otra estrategia
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # EnQueue como tarea pero no esperamos
+                    logger.warning("Event loop already running, skipping narrative for this frame")
+                    return None
+                else:
+                    narrative = asyncio.run(
+                        self.tactical_analyzer.narrative_generator.generate_narrative(context)
+                    )
+
+            if narrative:
+                alert = self._create_alert(
+                    frame_id=frame_id,
+                    alert_type="tactical",
+                    severity="info",
+                    title="📊 Análisis profesional",
+                    message=narrative,
+                    data={
+                        'narrative': narrative,
+                        'event_type': event_type,
+                        'model': 'claude-api'
+                    }
+                )
+                return alert
+
+        except Exception as e:
+            logger.error(f"Error generating professional alert: {e}")
+
+        return None
+
+    def _determine_significant_event(self, possession_stats: Dict) -> str:
+        """Determina el tipo de evento significativo"""
+        # Obtener cambios recientes
+        if len(self.possession_history) < 2:
+            return "momentum_check"
+
+        prev_poss = self.possession_history[-2][1]
+        curr_poss = possession_stats.get('possession_percent', {})
+
+        # Detectar cambios grandes en posesión
+        for team_id in [0, 1]:
+            swing = abs(curr_poss.get(team_id, 0) - prev_poss.get(team_id, 0))
+            if swing >= 15:
+                return f"possession_shift_team_{team_id}"
+
+        return "regular_check"
+
     def get_alert_summary(self) -> Dict:
         """Retorna resumen de alertas generadas"""
         return {

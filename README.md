@@ -90,9 +90,16 @@ python setup_check.py
 python app.py
 ```
 
+Por defecto usa `8001` (para evitar conflictos con proyectos en `8000`) y, si está ocupado, usa automáticamente otro libre.
+
 2. **Abrir en navegador:**
 ```
-http://localhost:8000
+http://localhost:8001
+```
+
+Si quieres forzar un puerto concreto, ejecuta:
+```bash
+PORT=8010 python app.py
 ```
 
 3. **Usar la interfaz:**

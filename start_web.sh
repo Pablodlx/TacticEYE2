@@ -22,9 +22,10 @@ mkdir -p uploads outputs static templates
 
 echo "✅ Verificación completada"
 echo ""
-echo "🌐 Iniciando servidor web en http://localhost:8000"
+PORT="${PORT:-8001}"
+echo "🌐 Iniciando servidor web en http://localhost:${PORT}"
 echo "   Presiona Ctrl+C para detener"
 echo ""
 
 # Iniciar aplicación
-python app.py
+PORT="${PORT}" python app.py

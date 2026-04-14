@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Montar pesos del modelo (no incluidos en imagen)
+      - ./weights:/app/weights:ro
+      # Persistir outputs fuera del contenedor
+      - tacticseye_outputs:/app/outputs
+      - tacticseye_outputs_streaming:/app/outputs_streaming
+      - tacticseye_outputs_heatmap:/app/outputs_heatmap
+      - tacticseye_uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    # Descomentar para GPU (requiere nvidia-container-runtime)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  tacticseye_outputs:
+  tacticseye_outputs_streaming:
+  tacticseye_outputs_heatmap:
+  tacticseye_uploads:

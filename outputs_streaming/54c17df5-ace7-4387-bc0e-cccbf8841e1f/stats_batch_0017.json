@@ -1,0 +1,66 @@
+{
+  "batch_idx": 17,
+  "start_frame": 1530,
+  "end_frame": 1619,
+  "chunk_stats": {
+    "frames_processed": 90,
+    "detections_count": 1070,
+    "events_count": 1,
+    "possession_team": 0,
+    "possession_player": 19,
+    "spatial": {
+      "calibration_valid": true,
+      "possession_by_zone": {
+        "0": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "1": [
+          0,
+          110,
+          138,
+          10,
+          42,
+          106,
+          2,
+          0,
+          0
+        ]
+      },
+      "zone_percentages": {
+        "0": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "1": [
+          0.0,
+          26.96078431372549,
+          33.82352941176471,
+          2.450980392156863,
+          10.294117647058822,
+          25.98039215686275,
+          0.49019607843137253,
+          0.0,
+          0.0
+        ]
+      },
+      "zone_partition_type": "thirds_lanes",
+      "num_zones": 9
+    }
+  },
+  "processing_time_ms": 4693.732023239136
+}

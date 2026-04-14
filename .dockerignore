@@ -1,0 +1,36 @@
+# Archivos innecesarios en la imagen Docker
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+*.log
+
+# Vídeos de prueba y salidas locales
+*.mp4
+*.avi
+*.mov
+*.mkv
+uploads/
+outputs/
+outputs_full/
+outputs_test/
+outputs_streaming/
+outputs_heatmap/
+
+# Weights (se montan como volumen en docker-compose)
+weights/
+
+# Tests y docs
+tests/
+*.md
+*.txt
+!requirements.txt
+
+# IDE y OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

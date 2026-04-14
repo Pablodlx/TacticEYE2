@@ -985,6 +985,16 @@ class BatchProcessor:
                 spatial_stats_for_alerts = None
                 if self.enable_spatial_tracking and self.spatial_tracker is not None:
                     spatial_stats_for_alerts = spatial_stats
+
+                    # Agregar eventos recientes para análisis táctico
+                    # Mantener los últimos 10 eventos de pases
+                    recent_pass_events = [
+                        e for e in events
+                        if e.get('type') == 'pass'
+                    ][-10:]
+
+                    if recent_pass_events:
+                        spatial_stats_for_alerts['recent_events'] = recent_pass_events
                 
                 # Generar alertas (frame_id es el argumento correcto)
                 alerts = self.alert_system.analyze_and_generate_alerts(
