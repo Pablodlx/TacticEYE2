@@ -707,6 +707,34 @@ class HeatmapAccumulator:
 
         self.num_frames += 1
 
+    def get_heatmap(self, team_id: int, normalize: Optional[str] = 'max') -> np.ndarray:
+        """
+        Obtiene el heatmap de un equipo.
+
+        Args:
+            team_id: ID del equipo (0 o 1)
+            normalize: Método de normalización:
+                - 'max': Dividir por valor máximo (rango [0, 1])
+                - 'sum': Dividir por suma total (densidad de probabilidad)
+                - 'frames': Dividir por número de frames
+                - None: Sin normalizar
+
+        Returns:
+            Matriz ny x nx con el heatmap
+        """
+        counts = self.counts_team0 if team_id == 0 else self.counts_team1
+
+        if normalize == 'max':
+            max_val = counts.max()
+            return counts / max_val if max_val > 0 else counts.copy()
+        elif normalize == 'sum':
+            total = counts.sum()
+            return counts / total if total > 0 else counts.copy()
+        elif normalize == 'frames':
+            return counts / self.num_frames if self.num_frames > 0 else counts.copy()
+        else:
+            return counts.copy()
+
     def reset(self):
         """Reinicia los contadores."""
         self.counts_team0.fill(0)
