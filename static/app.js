@@ -5,6 +5,11 @@ let possessionChart = null;
 let passesChart = null;
 let timelineChart = null;
 
+// Gráficos para la sección de resultados
+let resultsPossessionChart = null;
+let resultsPassesChart = null;
+let resultsTimelineChart = null;
+
 // Estado del chatbot de alertas
 let chatbotOpen = false;
 let unreadAlerts = 0;
@@ -33,6 +38,18 @@ function resetInterface() {
     if (timelineChart) {
         timelineChart.destroy();
         timelineChart = null;
+    }
+    if (resultsPossessionChart) {
+        resultsPossessionChart.destroy();
+        resultsPossessionChart = null;
+    }
+    if (resultsPassesChart) {
+        resultsPassesChart.destroy();
+        resultsPassesChart = null;
+    }
+    if (resultsTimelineChart) {
+        resultsTimelineChart.destroy();
+        resultsTimelineChart = null;
     }
     
     // Mostrar sección de upload, ocultar progreso y resultados
@@ -601,70 +618,83 @@ function updateLiveStats(stats) {
 // Mostrar resultados finales
 function showResults(stats) {
     console.log('Mostrando resultados finales:', stats);
-    
+
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'block';
-    
+
     // Stats Overview
     document.getElementById('total-time').textContent = stats.total_seconds.toFixed(1) + 's';
     document.getElementById('total-frames-stat').textContent = stats.total_frames;
     document.getElementById('possession-stat-0').textContent = (stats.possession_percent[0] || 0).toFixed(1) + '%';
     document.getElementById('possession-stat-1').textContent = (stats.possession_percent[1] || 0).toFixed(1) + '%';
-    
+
     // Mostrar botón de resumen de heatmaps
     const summaryBtnContainer = document.getElementById('heatmap-summary-btn-container');
     if (summaryBtnContainer) {
         summaryBtnContainer.style.display = 'block';
     }
-    
+
     // Actualizar estadísticas espaciales finales si están disponibles
     if (stats.spatial) {
         console.log('Stats espaciales finales:', stats.spatial);
         updateSpatialStats(stats.spatial);
+
+        // Mostrar zonas dominantes si están disponibles
+        if (stats.spatial.zone_percentages) {
+            console.log('Actualizando zonas con datos finales');
+            updateTopZones(0, stats.spatial.zone_percentages[0] || stats.spatial.zone_percentages['0'] || []);
+            updateTopZones(1, stats.spatial.zone_percentages[1] || stats.spatial.zone_percentages['1'] || []);
+        }
     }
-    
+
     // Posesión
-    const p0 = stats.possession_percent[0] || 0;
-    const p1 = stats.possession_percent[1] || 0;
-    
+    const p0 = (stats.possession_percent && stats.possession_percent[0]) || 0;
+    const p1 = (stats.possession_percent && stats.possession_percent[1]) || 0;
+
     document.getElementById('possession-percent-0').textContent = p0.toFixed(1) + '%';
     document.getElementById('possession-percent-1').textContent = p1.toFixed(1) + '%';
-    
+
     document.getElementById('possession-bar-0').style.width = p0 + '%';
     document.getElementById('possession-bar-1').style.width = p1 + '%';
-    
+
     // Tiempo
-    const t0 = stats.possession_seconds[0] || 0;
-    const t1 = stats.possession_seconds[1] || 0;
-    
+    const t0 = (stats.possession_seconds && stats.possession_seconds[0]) || 0;
+    const t1 = (stats.possession_seconds && stats.possession_seconds[1]) || 0;
+
     document.getElementById('possession-time-0').textContent = t0.toFixed(1) + 's';
     document.getElementById('possession-time-1').textContent = t1.toFixed(1) + 's';
-    
+
     // Pases
-    const passes0 = stats.passes ? stats.passes[0] || 0 : 0;
-    const passes1 = stats.passes ? stats.passes[1] || 0 : 0;
-    
+    const passes0 = (stats.passes && stats.passes[0]) || 0;
+    const passes1 = (stats.passes && stats.passes[1]) || 0;
+
     document.getElementById('passes-0').textContent = passes0;
     document.getElementById('passes-1').textContent = passes1;
-    
-    // Inicializar gráficos
-    initializeCharts();
-    
+
+    // Inicializar gráficos de resultados
+    initializeResultsCharts();
+
     // Actualizar gráficos
-    possessionChart.data.datasets[0].data = [p0, p1];
-    possessionChart.update();
-    
-    passesChart.data.datasets[0].data = [
-        stats.passes[0] || 0,
-        stats.passes[1] || 0
-    ];
-    passesChart.update();
-    
-    // Timeline
-    if (stats.timeline) {
-        updateTimelineChart(stats.timeline, stats.total_frames);
+    if (resultsPossessionChart) {
+        console.log('Actualizando gráfico de posesión:', [p0, p1]);
+        resultsPossessionChart.data.datasets[0].data = [p0, p1];
+        resultsPossessionChart.update();
     }
-    
+
+    if (resultsPassesChart) {
+        console.log('Actualizando gráfico de pases:', [passes0, passes1]);
+        resultsPassesChart.data.datasets[0].data = [passes0, passes1];
+        resultsPassesChart.update();
+    }
+
+    // Timeline
+    if (stats.timeline && stats.timeline.length > 0 && resultsTimelineChart) {
+        console.log('Actualizando timeline con', stats.timeline.length, 'segmentos');
+        updateResultsTimelineChart(stats.timeline, stats.total_frames);
+    } else {
+        console.log('Timeline vacío o no inicializado');
+    }
+
     // IMPORTANTE: Actualizar heatmaps cuando el análisis termina
     // Esperar un momento para que los archivos se guarden
     if (currentSessionId) {
@@ -780,25 +810,143 @@ function initializeCharts() {
     });
 }
 
-// Actualizar timeline
-function updateTimelineChart(timeline, totalFrames) {
+// Inicializar gráficos para resultados finales
+function initializeResultsCharts() {
+    if (resultsPossessionChart) return; // Ya inicializados
+
+    // Gráfico de posesión (circular)
+    const possessionCtx = document.getElementById('resultsPossessionChart')?.getContext('2d');
+    if (!possessionCtx) return;
+
+    resultsPossessionChart = new Chart(possessionCtx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Equipo 0', 'Equipo 1'],
+            datasets: [{
+                data: [50, 50],
+                backgroundColor: ['#00c851', '#ff4444'],
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    position: 'bottom'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.label + ': ' + context.parsed.toFixed(1) + '%';
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Gráfico de pases (barras)
+    const passesCtx = document.getElementById('resultsPassesChart')?.getContext('2d');
+    if (passesCtx) {
+        resultsPassesChart = new Chart(passesCtx, {
+            type: 'bar',
+            data: {
+                labels: ['Equipo 0', 'Equipo 1'],
+                datasets: [{
+                    label: 'Pases Completados',
+                    data: [0, 0],
+                    backgroundColor: ['#00c851', '#ff4444'],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: {
+                            stepSize: 1
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    }
+
+    // Gráfico de timeline
+    const timelineCtx = document.getElementById('resultsTimelineChart')?.getContext('2d');
+    if (timelineCtx) {
+        resultsTimelineChart = new Chart(timelineCtx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Timeline de Posesión',
+                    data: [],
+                    backgroundColor: []
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        display: false
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const team = context.dataset.backgroundColor[context.dataIndex] === '#00c851' ? 'Equipo 0' : 'Equipo 1';
+                                return team + ': ' + context.parsed.x + ' frames';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        stacked: true
+                    },
+                    y: {
+                        stacked: true
+                    }
+                }
+            }
+        });
+    }
+}
+
+// Actualizar timeline de resultados
+function updateResultsTimelineChart(timeline, totalFrames) {
+    if (!resultsTimelineChart || !timeline || timeline.length === 0) {
+        console.log('Timeline vacío o gráfico no inicializado');
+        return;
+    }
+
     const labels = [];
     const data = [];
     const colors = [];
-    
+
     timeline.forEach((segment, i) => {
         const [start, end, team] = segment;
         const duration = end - start;
-        
-        labels.push(`Segmento ${i + 1}`);
+
+        labels.push(`Seg ${i + 1}`);
         data.push(duration);
         colors.push(team === 0 ? '#00c851' : '#ff4444');
     });
-    
-    timelineChart.data.labels = labels;
-    timelineChart.data.datasets[0].data = data;
-    timelineChart.data.datasets[0].backgroundColor = colors;
-    timelineChart.update();
+
+    resultsTimelineChart.data.labels = labels;
+    resultsTimelineChart.data.datasets[0].data = data;
+    resultsTimelineChart.data.datasets[0].backgroundColor = colors;
+    resultsTimelineChart.update();
 }
 
 // Mostrar error

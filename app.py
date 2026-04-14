@@ -18,6 +18,8 @@ import uuid
 from typing import Dict, Optional
 import traceback
 from datetime import datetime
+import os
+import socket
 
 try:
     from ultralytics import YOLO
@@ -95,22 +97,42 @@ manager = ConnectionManager()
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """Página principal"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request, "index.html")
+
+
+MAX_UPLOAD_BYTES = 5000 * 1024 * 1024  # 500 MB
+ALLOWED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".ts", ".m4v"}
 
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...)):
     """Subir video para análisis"""
     try:
-        # Generar ID único
+        # Validar extensión
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in ALLOWED_EXTENSIONS:
+            return JSONResponse(
+                {"success": False, "error": f"Formato no soportado: {suffix}. Permitidos: {', '.join(sorted(ALLOWED_EXTENSIONS))}"},
+                status_code=400,
+            )
+
+        # Leer en chunks para limitar uso de memoria y controlar tamaño
         session_id = str(uuid.uuid4())
-        
-        # Guardar archivo
-        file_path = UPLOAD_DIR / f"{session_id}_{file.filename}"
+        safe_name = Path(file.filename).name  # strip any directory components
+        file_path = UPLOAD_DIR / f"{session_id}_{safe_name}"
+        total_bytes = 0
         with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
+            while chunk := await file.read(1024 * 1024):  # 1 MB chunks
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    f.close()
+                    file_path.unlink(missing_ok=True)
+                    return JSONResponse(
+                        {"success": False, "error": f"Archivo demasiado grande (máx {MAX_UPLOAD_BYTES // 1024 // 1024} MB)"},
+                        status_code=413,
+                    )
+                f.write(chunk)
+
         # Inicializar estado
         analysis_state[session_id] = {
             "status": "uploaded",
@@ -119,13 +141,13 @@ async def upload_video(file: UploadFile = File(...)):
             "progress": 0,
             "stats": None
         }
-        
+
         return JSONResponse({
             "success": True,
             "session_id": session_id,
             "filename": file.filename
         })
-    
+
     except Exception as e:
         return JSONResponse({
             "success": False,
@@ -877,7 +899,7 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
             source=source,
             batch_size_seconds=3.0,
             output_dir=str(BASE_DIR / "outputs_streaming"),
-            device="cuda" if Path("weights/best.pt").exists() else "cpu",
+            device="cuda" if __import__('torch').cuda.is_available() else "cpu",
             model_path="weights/best.pt",
             conf_threshold=0.30,
             on_progress=on_progress,
@@ -911,26 +933,43 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
         total_frames = final_state.total_frames_processed
         fps = final_state.fps or 30.0
         total_seconds = total_frames / fps
-        
+
         # Calcular porcentajes
         frames_by_team = possession_stats.frames_by_team
-        total_possession_frames = sum(frames_by_team.values())
-        
-        possession_percent = {}
-        possession_seconds = {}
-        for team_id, frames in frames_by_team.items():
-            if team_id >= 0:  # Excluir -1 (sin posesión)
-                pct = (frames / total_possession_frames * 100) if total_possession_frames > 0 else 0
-                possession_percent[team_id] = pct
-                possession_seconds[team_id] = frames / fps
-        
+        total_possession_frames = sum(f for k, f in frames_by_team.items() if k >= 0)
+
+        possession_percent = [0, 0]  # Array: [team_0%, team_1%]
+        possession_seconds = [0, 0]  # Array: [team_0_sec, team_1_sec]
+        for team_id in [0, 1]:
+            frames = frames_by_team.get(team_id, 0)
+            pct = (frames / total_possession_frames * 100) if total_possession_frames > 0 else 0
+            possession_percent[team_id] = pct
+            possession_seconds[team_id] = frames / fps
+
+        # Convertir passes_by_team a array
+        passes = [0, 0]
+        if hasattr(possession_stats, 'passes_by_team'):
+            for team_id in [0, 1]:
+                passes[team_id] = possession_stats.passes_by_team.get(team_id, 0)
+
+        # Construir timeline de posesión (si está disponible)
+        timeline = []
+        if hasattr(possession_stats, 'possession_changes') and possession_stats.possession_changes:
+            for change in possession_stats.possession_changes:
+                if isinstance(change, dict):
+                    frame = change.get('frame', 0)
+                    team = change.get('team', -1)
+                    if team >= 0:
+                        timeline.append([frame, frame + 1, team])
+
         final_stats = {
             "total_frames": total_frames,
             "total_seconds": total_seconds,
             "possession_percent": possession_percent,
             "possession_seconds": possession_seconds,
-            "passes": possession_stats.passes_by_team,
-            "possession_changes": possession_stats.possession_changes
+            "passes": passes,
+            "possession_changes": possession_stats.possession_changes,
+            "timeline": timeline
         }
         
         # Añadir estadísticas espaciales si están disponibles
@@ -941,25 +980,76 @@ def process_video_streaming(session_id: str, source_type: SourceType, source: st
                     BASE_DIR / "outputs_streaming" / f"{session_id}_heatmaps.npz",
                     OUTPUT_DIR / f"{session_id}_heatmaps.npz"
                 ]
-                
+
                 spatial_available = False
+                heatmap_path = None
                 for path in search_paths:
                     if path.exists():
                         spatial_available = True
+                        heatmap_path = path
                         print(f"✓ Heatmaps disponibles para session {session_id} en {path}")
                         break
-                
+
+                # Inicializar estructura espacial base
                 final_stats["spatial"] = {
                     "calibration_valid": spatial_available,
                     "heatmaps_available": spatial_available,
-                    "session_id": session_id
+                    "session_id": session_id,
+                    "partition_type": "thirds_lanes",
+                    "num_zones": 9,
+                    "zone_percentages": {0: [], 1: []},
+                    "possession_by_zone": {0: [], 1: []}
                 }
-                
+
+                # Si los heatmaps están disponibles, leer datos del NPZ
+                if spatial_available and heatmap_path:
+                    try:
+                        heatmap_data = np.load(str(heatmap_path), allow_pickle=True)
+
+                        # Extraer metadata si existe
+                        if 'metadata' in heatmap_data:
+                            metadata_item = heatmap_data['metadata']
+                            # Si es un array de numpy, extraer el item
+                            if hasattr(metadata_item, 'item'):
+                                metadata = metadata_item.item()
+                            else:
+                                metadata = metadata_item
+
+                            final_stats["spatial"]["partition_type"] = metadata.get('partition_type', 'thirds_lanes')
+                            final_stats["spatial"]["num_zones"] = int(metadata.get('num_zones', 9))
+
+                        # Extraer zone_percentages
+                        if 'zone_percentages_team_0' in heatmap_data:
+                            final_stats["spatial"]["zone_percentages"][0] = heatmap_data['zone_percentages_team_0'].tolist()
+                        if 'zone_percentages_team_1' in heatmap_data:
+                            final_stats["spatial"]["zone_percentages"][1] = heatmap_data['zone_percentages_team_1'].tolist()
+
+                        # Extraer possession_by_zone
+                        if 'possession_by_zone_team_0' in heatmap_data:
+                            final_stats["spatial"]["possession_by_zone"][0] = heatmap_data['possession_by_zone_team_0'].tolist()
+                        if 'possession_by_zone_team_1' in heatmap_data:
+                            final_stats["spatial"]["possession_by_zone"][1] = heatmap_data['possession_by_zone_team_1'].tolist()
+
+                        print(f"✓ Datos espaciales extraídos correctamente para session {session_id}")
+
+                    except Exception as e:
+                        print(f"⚠ Error leyendo datos del NPZ: {e}")
+                        # Los datos por defecto ya están inicializados
+
                 if not spatial_available:
                     print(f"⚠ Heatmaps no encontrados. Rutas buscadas: {search_paths}")
+
             except Exception as e:
                 print(f"Error verificando heatmaps: {e}")
-                final_stats["spatial"] = {"calibration_valid": False}
+                # Inicializar con valores por defecto
+                final_stats["spatial"] = {
+                    "calibration_valid": False,
+                    "heatmaps_available": False,
+                    "partition_type": "thirds_lanes",
+                    "num_zones": 9,
+                    "zone_percentages": {0: [], 1: []},
+                    "possession_by_zone": {0: [], 1: []}
+                }
         
         state["status"] = "completed"
         state["progress"] = 100
@@ -1167,13 +1257,43 @@ app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 if __name__ == "__main__":
     import uvicorn
+
+    def _is_port_available(bind_host: str, bind_port: int) -> bool:
+        test_host = "127.0.0.1" if bind_host == "0.0.0.0" else bind_host
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind((test_host, bind_port))
+                return True
+            except OSError:
+                return False
+
+    def _find_available_port(bind_host: str, preferred_ports: list[int]) -> int:
+        for candidate in preferred_ports:
+            if _is_port_available(bind_host, candidate):
+                return candidate
+
+        test_host = "127.0.0.1" if bind_host == "0.0.0.0" else bind_host
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((test_host, 0))
+            return int(sock.getsockname()[1])
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port_env = os.getenv("PORT")
+    if port_env:
+        port = int(port_env)
+    else:
+        port = _find_available_port(host, [8001, 8002, 8010, 8000])
+
+    local_host = "localhost" if host == "0.0.0.0" else host
     print("\n" + "="*60)
     print("🚀 TacticEYE2 Web Application")
     print("="*60)
     print("\n📱 Abre en tu navegador:")
-    print("   http://localhost:8000")
-    print("   http://127.0.0.1:8000")
+    print(f"   http://{local_host}:{port}")
+    print(f"   http://127.0.0.1:{port}")
+    if not port_env:
+        print(f"\nℹ️ Puerto por defecto automático: {port}")
     print("\n💡 Presiona Ctrl+C para detener el servidor\n")
     print("="*60 + "\n")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
