@@ -6,7 +6,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-TacticEYE2 is a football video analytics system with a full web interface and core modules for player tracking, team classification, ball possession, and pass counting.
+TacticEYE2 is a real-time football video analytics system with a full web interface and core modules for player tracking, team classification, ball possession, and pass counting.
 
 ## What's New
 
