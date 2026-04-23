@@ -1,4 +1,4 @@
-# ⚽ TacticEYE2 - Sistema de Análisis de Fútbol
+# TacticEYE2 - Football Match Analysis System
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)](https://pytorch.org/)
@@ -6,130 +6,125 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104-009688)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
-Sistema de análisis de partidos de fútbol con **interfaz web** y funcionalidades core: **Tracking con ReID**, **Clasificación de Equipos**, **Detección de Posesión** y **Contador de Pases**.
+TacticEYE2 is a football video analytics system with a full web interface and core modules for player tracking, team classification, ball possession, and pass counting.
 
-## 🎯 Funcionalidades Core
+## What's New
 
-### 1️⃣ **Tracking con Re-Identificación (ReID)**
-- ✅ Re-identificación de jugadores usando features profundas (OSNet)
-- ✅ IDs persistentes durante todo el partido
-- ✅ Matching basado en similitud visual + IoU
-- ✅ Gestión de oclusiones y salidas de cámara
+- Complete FastAPI + WebSocket web app for live analysis
+- Real-time dashboard with interactive charts (Chart.js + Bootstrap)
+- Deterministic possession engine (`PossessionTrackerV2`)
+- Automatic pass counter by team
+- Improved team classification stability with `TeamClassifierV2`
 
-### 2️⃣ **Clasificación Automática de Equipos**
-- ✅ **TeamClassifierV2**: Clustering K-means en espacio LAB con eliminación de verde
-- ✅ Detección automática de árbitros
-- ✅ Sistema de votación temporal para estabilidad
+## Core Features
 
-### 3️⃣ **Detección de Posesión del Balón (V2)**
-- ✅ Sistema determinista (100% del tiempo asignado)
-- ✅ Algoritmo de 3 pasos: detectar balón → encontrar jugador cercano → validar distancia
-- ✅ Hiesteresis configurable (default: 5 frames)
-- ✅ Distancia configurable (default: 60px)
-- ✅ Timeline completo de cambios de posesión
-- ✅ Estadísticas en tiempo real (%, frames, segundos)
-- ✅ Visualización con rectángulo amarillo y línea al balón
+### 1) Re-Identification Tracking (ReID)
+- Player ReID using deep features (OSNet)
+- Persistent player IDs across the full match
+- Matching based on visual similarity + IoU
+- Occlusion and re-entry handling
 
-### 4️⃣ **Contador de Pases** 🆕
-- ✅ Detección automática de pases entre jugadores del mismo equipo
-- ✅ Estadísticas acumuladas por equipo
-- ✅ Visualización en tiempo real
+### 2) Automatic Team Classification
+- `TeamClassifierV2`: K-means in LAB color space with green filtering
+- Automatic referee detection
+- Temporal voting for stable team assignments
 
-### 5️⃣ **Interfaz Web** 🆕
-- ✅ Aplicación web completa con FastAPI
-- ✅ Subida de videos y análisis en tiempo real
-- ✅ Gráficos interactivos con Chart.js
-- ✅ WebSocket para actualizaciones en vivo
-- ✅ Dashboard responsive con Bootstrap
+### 3) Ball Possession Detection (V2)
+- Deterministic possession assignment
+- 3-step process: detect ball -> nearest player -> distance validation
+- Configurable hysteresis (default: 5 frames)
+- Configurable possession distance (default: 60 px)
+- Full possession timeline and live stats
+- On-frame possession visualization (highlight + ball link)
 
-## 📋 Requisitos
+### 4) Pass Counter
+- Automatic pass detection between teammates
+- Cumulative team pass statistics
+- Live on-screen pass updates
+
+### 5) Web Application
+- End-to-end FastAPI web app
+- Video upload and live analysis processing
+- Real-time updates through WebSocket
+- Responsive dashboard with interactive charts
+
+## Requirements
 
 ### Hardware
-- **GPU**: NVIDIA con CUDA (recomendado, mínimo 6GB VRAM)
-- **RAM**: 8GB mínimo
-- **Almacenamiento**: 2GB libres
+- NVIDIA GPU with CUDA recommended (minimum 6 GB VRAM)
+- 8 GB RAM minimum
+- 2 GB free storage
 
 ### Software
 - Python 3.8+
-- CUDA 11.8+ (para GPU)
+- CUDA 11.8+ (GPU mode)
 
-## 🔧 Instalación
+## Installation
 
-### 1. Clonar repositorio
+### 1. Clone repository
 ```bash
 git clone https://github.com/TuUsuario/TacticEYE2.git
 cd TacticEYE2
 ```
 
-### 2. Crear entorno virtual
+### 2. Create virtual environment
 ```bash
 python -m venv venv
 source venv/bin/activate  # Linux/Mac
-# o
-venv\Scripts\activate  # Windows
+# or
+venv\Scripts\activate     # Windows
 ```
 
-### 3. Instalar dependencias
+### 3. Install dependencies
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
-pip install -r requirements_web.txt  # Para la aplicación web
+pip install -r requirements_web.txt
 ```
 
-### 4. Verificar instalación
+### 4. Validate setup
 ```bash
 python setup_check.py
 ```
 
-## 🎮 Uso
+## Usage
 
-### 🌐 Aplicación Web (Recomendado)
+### Web App (Recommended)
 
-1. **Iniciar servidor:**
+1. Start server:
 ```bash
 python app.py
 ```
 
-Por defecto usa `8001` (para evitar conflictos con proyectos en `8000`) y, si está ocupado, usa automáticamente otro libre.
+Default port is `8001` (to avoid common `8000` conflicts). If busy, a free port is selected automatically.
 
-2. **Abrir en navegador:**
+2. Open in browser:
 ```
 http://localhost:8001
 ```
 
-Si quieres forzar un puerto concreto, ejecuta:
+To force a specific port:
 ```bash
 PORT=8010 python app.py
 ```
 
-3. **Usar la interfaz:**
-   - Subir video (.mp4, .avi, etc.)
-   - El análisis comenzará automáticamente
-   - Ver estadísticas en tiempo real:
-     - Posesión por equipo (%)
-     - Pases completados
-     - Timeline de posesión
-     - Gráficos interactivos
+3. In the UI:
+- Upload a video (`.mp4`, `.avi`, etc.)
+- Analysis starts automatically
+- Monitor live stats:
+  - Team possession (%)
+  - Completed passes
+  - Possession timeline
+  - Interactive charts
 
-### 💻 Línea de Comandos
+### Command Line
 
-#### Comando Básico
+Basic run:
 ```bash
 python pruebatrackequipo.py video.mp4 --model weights/best.pt --reid
 ```
 
-### Análisis con V3 (Recomendado)
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --reid \
-    --use-v3 \
-    --v3-recalibrate 300
-```
-
-**Nota:** TeamClassifierV3 no está disponible actualmente. Usar V2 por defecto.
-
-### Posesión con Alta Precisión
+High-precision possession setup:
 ```bash
 python pruebatrackequipo.py video.mp4 \
     --model weights/best.pt \
@@ -137,236 +132,131 @@ python pruebatrackequipo.py video.mp4 \
     --possession-distance 40
 ```
 
-### Sin Visualización (Más Rápido)
+Faster run without preview window:
 ```bash
 python pruebatrackequipo.py video.mp4 \
     --model weights/best.pt \
     --reid \
     --no-show \
-    --output resultado.mp4
+    --output result.mp4
 ```
 
-## 📚 Parámetros Disponibles
+## Main CLI Parameters
 
-### Detección YOLO
-| Parámetro | Descripción | Default |
+### YOLO Detection
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--model` | Ruta al modelo YOLO | `yolov8n.pt` |
-| `--imgsz` | Tamaño de imagen | `640` |
-| `--conf` | Umbral de confianza | `0.35` |
-| `--max-det` | Máximo detecciones | `100` |
+| `--model` | YOLO model path | `yolov8n.pt` |
+| `--imgsz` | Input image size | `640` |
+| `--conf` | Confidence threshold | `0.35` |
+| `--max-det` | Max detections | `100` |
 
-### Tracking ReID
-| Parámetro | Descripción | Default |
+### ReID Tracking
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--reid` | Activar ReID tracker | `False` |
+| `--reid` | Enable ReID tracker | `False` |
 
-### Clasificación de Equipos V2
-| Parámetro | Descripción | Default |
+### Team Classification (V2)
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--tc-kmeans-min-tracks` | Tracks mínimos para KMeans | `12` |
-| `--tc-vote-history` | Historial de votación | `4` |
-| `--tc-use-L` | Usar canal L* | `True` |
-| `--tc-L-weight` | Peso del canal L* | `0.5` |
+| `--tc-kmeans-min-tracks` | Minimum tracks for KMeans | `12` |
+| `--tc-vote-history` | Voting history size | `4` |
+| `--tc-use-L` | Use L* channel | `True` |
+| `--tc-L-weight` | L* channel weight | `0.5` |
 
-### Clasificación de Equipos V3
-| Parámetro | Descripción | Default |
+### Team Classification (V3, Experimental)
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--use-v3` | Usar TeamClassifierV3 | `False` |
-| `--v3-recalibrate` | Recalibrar cada N frames | `300` |
-| `--v3-variance` | Features de varianza | `True` |
-| `--v3-adaptive-thresh` | Umbral adaptativo | `True` |
-| `--v3-hysteresis` | Hiesteresis temporal | `True` |
+| `--use-v3` | Enable TeamClassifierV3 | `False` |
+| `--v3-recalibrate` | Recalibrate every N frames | `300` |
+| `--v3-variance` | Use variance features | `True` |
+| `--v3-adaptive-thresh` | Adaptive thresholds | `True` |
+| `--v3-hysteresis` | Temporal hysteresis | `True` |
 
-### Detección de Posesión
-| Parámetro | Descripción | Default |
+### Possession
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--possession-distance` | Distancia máxima (píxeles) | `60` |
+| `--possession-distance` | Max distance (pixels) | `60` |
 
-### Salida
-| Parámetro | Descripción | Default |
+### Output
+| Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--no-show` | Sin ventana de preview | `False` |
-| `--output` | Guardar video procesado | `None` |
+| `--no-show` | Disable preview window | `False` |
+| `--output` | Save processed video | `None` |
 
-## 🏗️ Estructura del Proyecto
+## Project Structure
 
-```
+```text
 TacticEYE2/
 ├── modules/
-│   ├── reid_tracker.py              # Tracking con Re-ID
-│   ├── team_classifier.py           # Clasificación V1
-│   ├── team_classifier_v2.py        # Clasificación V2
-│   ├── team_classifier_v2_backup.py # Backup V2
-│   ├── possession_tracker.py        # Posesión V1
-│   └── possession_tracker_v2.py     # Posesión V2 ⭐
+│   ├── reid_tracker.py
+│   ├── team_classifier.py
+│   ├── team_classifier_v2.py
+│   ├── possession_tracker.py
+│   └── possession_tracker_v2.py
 ├── weights/
-│   └── best.pt                      # Modelo YOLO entrenado
-├── pruebatrackequipo.py             # Script principal ⭐
-├── setup_check.py                   # Verificación
-├── config.yaml                      # Configuración
-└── requirements.txt                 # Dependencias
+│   └── best.pt
+├── pruebatrackequipo.py
+├── app.py
+├── setup_check.py
+├── config.yaml
+├── requirements.txt
+└── requirements_web.txt
 ```
 
-## 📊 Salida del Sistema
+## Troubleshooting
 
-### Resumen de Posesión (Consola)
-```
-======================================================================
-POSSESSION SUMMARY (PossessionTrackerV2)
-======================================================================
+### `KeyError: -1`
+Invalid `team_id` values (typically referees) are filtered automatically by the pipeline.
 
-Total frames processed: 900
-Total time: 30.00 seconds
-
-Possession by team:
-  Team 0: 241 frames (8.0s) = 26.8%
-  Team 1: 544 frames (18.1s) = 60.4%
-
-Validation:
-  Frames assigned: 785/900
-  Coverage: 87.2%
-
-Possession timeline (9 segments):
-  Segment 1: Frames 116-487 (371f) → Team 1
-  Segment 2: Frames 487-588 (101f) → Team 0
-  ...
-======================================================================
-```
-
-### Visualización en Tiempo Real
-- **Rectángulo amarillo**: Jugador con posesión
-- **Línea amarilla**: Conexión jugador-balón
-- **Distancia**: Mostrada en píxeles
-- **Estadísticas**: Posesión acumulada
-- **Equipo 0**: Verde
-- **Equipo 1**: Azul (rojo en BGR)
-- **Árbitros**: Naranja
-
-## 🎯 Ejemplos de Uso
-
-### 1. Máxima Precisión
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --conf 0.40 \
-    --reid \
-    --use-v3 \
-    --v3-recalibrate 150 \
-    --possession-distance 40
-```
-
-### 2. Máxima Velocidad
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --conf 0.25 \
-    --imgsz 416 \
-    --reid \
-    --no-show
-```
-
-### 3. Balance Óptimo (Recomendado)
-```bash
-python pruebatrackequipo.py video.mp4 \
-    --model weights/best.pt \
-    --conf 0.35 \
-    --reid \
-    --use-v3 \
-    --possession-distance 60
-```
-
-## 🔍 Módulos Core
-
-### ReID Tracker (`reid_tracker.py`)
-Sistema de tracking con re-identificación:
-- **Features OSNet**: Extracción de características profundas
-- **IDs persistentes**: Mantiene IDs todo el partido
-- **Recovery**: Re-identifica tras oclusiones
-- **Matching**: Combina similitud visual + IoU espacial
-
-### TeamClassifierV2 (`team_classifier_v2.py`)
-Clasificación de equipos robusta:
-- **Espacio LAB**: Clustering en espacio de color LAB
-- **Anti-verde**: Eliminación automática del césped
-- **Votación temporal**: Sistema de votación para estabilidad
-- **Features**: LAB (a*,b* + L* weighted)
-
-### TeamClassifierV3 (Opcional)
-Sistema avanzado con:
-- **Recalibración**: KMeans se re-entrena automáticamente
-- **Features robustas**: Varianza + textura + edges
-- **Hiesteresis**: Requiere múltiples frames para cambios
-- **Adaptativo**: Ajusta umbrales según separación
-
-### PossessionTrackerV2 (`possession_tracker_v2.py`)
-Sistema determinista de posesión:
-- **100% asignación**: Todo el tiempo a algún equipo
-- **Hiesteresis**: 5 frames consecutivos para cambios
-- **Timeline**: Segmentos completos con timestamps
-- **Validación**: Cobertura automática
-- **API simple**: `update()`, `get_possession_stats()`, `get_possession_timeline()`
-
-## 🐛 Solución de Problemas
-
-### Error: KeyError -1
-**Solución**: El sistema filtra automáticamente team_id inválidos (referees).
-
-### Clasificación incorrecta
-**Solución**: Prueba TeamClassifierV3:
+### Inaccurate team classification
+Try V3 mode:
 ```bash
 --use-v3 --v3-recalibrate 300
 ```
 
-### Posesión con cambios rápidos
-**Solución**: Reduce la distancia:
+### Possession switches too quickly
+Reduce possession distance:
 ```bash
 --possession-distance 40
 ```
 
-### Procesamiento lento
-**Solución**: Reduce resolución y desactiva preview:
+### Slow processing
+Lower resolution and disable preview:
 ```bash
 --imgsz 416 --no-show
 ```
 
-## 📝 Clases Detectadas
+## YOLO Classes
 
-El modelo YOLO detecta:
-- **0**: `player` - Jugador de campo
-- **1**: `ball` - Balón
-- **2**: `referee` - Árbitro
-- **3**: `goalkeeper` - Portero
+- `0`: `player`
+- `1`: `ball`
+- `2`: `referee`
+- `3`: `goalkeeper`
 
-## 🚀 Roadmap (Próximas Funcionalidades)
+## Roadmap
 
-Las siguientes funcionalidades se añadirán más adelante:
-- 🔄 Calibración del campo (homografía 2D→3D)
-- 🔄 Mapas de calor por equipo
-- 🔄 Estadísticas avanzadas (distancias, velocidades)
-- 🔄 Overlays profesionales
-- 🔄 Exportación completa (CSV, JSON, NPZ)
-- 🔄 Detección de eventos (pases, tiros)
+- Field calibration (2D -> 3D homography)
+- Team heatmaps
+- Advanced physical stats (distance, speed)
+- Professional broadcast overlays
+- Full exports (CSV, JSON, NPZ)
+- Event detection extensions
 
-## 🤝 Contribuir
+## Contributing
 
-Las contribuciones son bienvenidas:
-1. Fork del repositorio
-2. Crea una rama (`git checkout -b feature/AmazingFeature`)
-3. Commit (`git commit -m 'Add AmazingFeature'`)
-4. Push (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m "Add AmazingFeature"`)
+4. Push branch (`git push origin feature/AmazingFeature`)
+5. Open a pull request
 
-## 📄 Licencia
+## License
 
-Este proyecto está bajo la Licencia MIT.
+This project is licensed under the MIT License.
 
-## 🙏 Agradecimientos
+## Acknowledgements
 
 - [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
 - [OSNet](https://github.com/KaiyangZhou/deep-person-reid)
-- Comunidad de Computer Vision
-
----
-
-**Versión Simplificada v2.0** - Solo funcionalidades core: Tracking + Equipos + Posesión
+- Computer Vision community

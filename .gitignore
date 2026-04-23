@@ -97,6 +97,8 @@ temp/
 # OS
 Thumbs.db
 .DS_Store
+*:Zone.Identifier
+*.Zone.Identifier
 
 # PyTorch
 *.pth.tar
