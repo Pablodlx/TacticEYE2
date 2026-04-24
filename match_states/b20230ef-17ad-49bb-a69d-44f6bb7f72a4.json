@@ -1,0 +1,231 @@
+{
+  "match_id": "b20230ef-17ad-49bb-a69d-44f6bb7f72a4",
+  "source_type": "uploaded_file",
+  "source_url": "/home/pablodlx/TacticEYE2_github/uploads/b20230ef-17ad-49bb-a69d-44f6bb7f72a4_sample_match.mp4",
+  "fps": 30.0,
+  "status": "running",
+  "total_frames_processed": 6750,
+  "last_batch_idx": 74,
+  "last_update": "2026-04-24T11:15:13.693487",
+  "tracker_state": {
+    "active_tracks": {
+      "11": {
+        "id": 11,
+        "team_id": 1
+      },
+      "20": {
+        "id": 20,
+        "team_id": 1
+      },
+      "5": {
+        "id": 5,
+        "team_id": 1
+      },
+      "21": {
+        "id": 21,
+        "team_id": 1
+      },
+      "18": {
+        "id": 18,
+        "team_id": 1
+      },
+      "9": {
+        "id": 9,
+        "team_id": 1
+      },
+      "22": {
+        "id": 22,
+        "team_id": 1
+      },
+      "15": {
+        "id": 15,
+        "team_id": 1
+      },
+      "16": {
+        "id": 16,
+        "team_id": 1
+      },
+      "3": {
+        "id": 3,
+        "team_id": 1
+      },
+      "8": {
+        "id": 8,
+        "team_id": 1
+      },
+      "23": {
+        "id": 23,
+        "team_id": 1
+      },
+      "10": {
+        "id": 10,
+        "team_id": 1
+      },
+      "24": {
+        "id": 24,
+        "team_id": 0
+      },
+      "25": {
+        "id": 25,
+        "team_id": 1
+      },
+      "17": {
+        "id": 17,
+        "team_id": 1
+      },
+      "4": {
+        "id": 4,
+        "team_id": 1
+      },
+      "2": {
+        "id": 2,
+        "team_id": 1
+      },
+      "1": {
+        "id": 1,
+        "team_id": 1
+      },
+      "13": {
+        "id": 13,
+        "team_id": 1
+      },
+      "6": {
+        "id": 6,
+        "team_id": 0
+      },
+      "19": {
+        "id": 19,
+        "team_id": 1
+      },
+      "14": {
+        "id": 14,
+        "team_id": 1
+      },
+      "12": {
+        "id": 12,
+        "team_id": 1
+      },
+      "7": {
+        "id": 7,
+        "team_id": 1
+      }
+    },
+    "next_id": 26,
+    "lost_tracks": {},
+    "last_frame_idx": 6750
+  },
+  "team_classifier_state": {
+    "player_team_map": {
+      "1": 1,
+      "2": 0,
+      "15": 0,
+      "3": -1,
+      "16": 1,
+      "6": -1,
+      "14": -1,
+      "8": 1,
+      "24": -1,
+      "11": 0,
+      "10": 1,
+      "5": 1,
+      "22": 1,
+      "19": -1,
+      "18": 1,
+      "4": 1,
+      "12": 1,
+      "7": 1,
+      "13": -1,
+      "9": 0,
+      "20": -1,
+      "17": 1,
+      "21": 1,
+      "23": -1,
+      "25": -1
+    },
+    "vote_history": {},
+    "team_colors": {
+      "0": [
+        41.71875,
+        131.5,
+        142.5
+      ],
+      "1": [
+        109.95833587646484,
+        126.33333587646484,
+        121.875
+      ]
+    },
+    "trained_frames": 0,
+    "is_trained": true
+  },
+  "possession_state": {
+    "current_team": 0,
+    "current_player": 25,
+    "frames_by_team": {
+      "0": 4967,
+      "1": 1497,
+      "-1": 0
+    },
+    "passes_by_team": {
+      "0": 52,
+      "1": 25
+    },
+    "possession_changes": [],
+    "last_frame_idx": 6750
+  },
+  "cached_summary": {
+    "match_id": "b20230ef-17ad-49bb-a69d-44f6bb7f72a4",
+    "status": "running",
+    "progress": {
+      "total_frames": 6660,
+      "total_seconds": 222.0,
+      "last_batch": 73,
+      "last_update": "2026-04-24T11:15:09.279620"
+    },
+    "possession": {
+      "current_team": 0,
+      "current_player": 11,
+      "percent_by_team": {
+        "0": 76.51396297458425,
+        "1": 23.48603702541575,
+        "-1": 0.0
+      },
+      "seconds_by_team": {
+        "0": 162.56666666666666,
+        "1": 49.9,
+        "-1": 0.0
+      },
+      "frames_by_team": {
+        "0": 4877,
+        "1": 1497,
+        "-1": 0
+      }
+    },
+    "passes": {
+      "by_team": {
+        "0": 50,
+        "1": 25
+      },
+      "total": 75
+    },
+    "teams": {
+      "total_players": 25,
+      "team_0_players": 3,
+      "team_1_players": 13
+    },
+    "tracking": {
+      "active_tracks": 25,
+      "total_ids": 26
+    }
+  },
+  "metadata": {
+    "video_metadata": {
+      "fps": 30.0,
+      "width": 1280,
+      "height": 720,
+      "total_frames": 168577,
+      "duration_seconds": 5619.233333333334,
+      "is_live": false
+    }
+  }
+}

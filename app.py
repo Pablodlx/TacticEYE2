@@ -70,6 +70,70 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # Estado global de análisis
 analysis_state: Dict[str, dict] = {}
 
+# Filtro anti-outliers para renderizado de heatmaps
+HEATMAP_GOAL_LINE_MARGIN_M = 2.0
+HEATMAP_SIDELINE_MARGIN_M = 0.4
+HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M = 1.2
+
+
+def _filter_heatmap_positions(positions: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """
+    Filtra posiciones sospechosas cerca de bordes del campo para mejorar realismo.
+    """
+    filtered = []
+    for x, y in positions:
+        if x is None or y is None:
+            continue
+        if not (0.0 <= x <= 105.0 and 0.0 <= y <= 68.0):
+            continue
+        # Evitar acumulación falsa en líneas de gol/porterías
+        if x <= HEATMAP_GOAL_LINE_MARGIN_M or x >= (105.0 - HEATMAP_GOAL_LINE_MARGIN_M):
+            continue
+        # Filtro suave de bandas (menos agresivo)
+        if y <= HEATMAP_SIDELINE_MARGIN_M or y >= (68.0 - HEATMAP_SIDELINE_MARGIN_M):
+            continue
+
+        # Filtrar posiciones excesivamente cercanas a keypoints teóricos
+        # (normal + flipped), típicas de errores de "snap".
+        is_keypoint_snap = False
+        for _, (kx, ky) in FIELD_POINTS.items():
+            if np.hypot(x - kx, y - ky) <= HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M:
+                is_keypoint_snap = True
+                break
+            kx_flip = 105.0 - kx
+            if np.hypot(x - kx_flip, y - ky) <= HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M:
+                is_keypoint_snap = True
+                break
+        if is_keypoint_snap:
+            continue
+
+        filtered.append((x, y))
+    return filtered
+
+
+def _mask_keypoint_bins(heatmap: np.ndarray):
+    """
+    Enmascara bins alrededor de keypoints en la matriz de heatmap para
+    reducir acumulaciones artificiales por "snap" geométrico.
+    """
+    h_hm, w_hm = heatmap.shape
+    radius_bins_x = max(1, int((HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M / 105.0) * w_hm))
+    radius_bins_y = max(1, int((HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M / 68.0) * h_hm))
+
+    keypoint_positions = []
+    for _, (kx, ky) in FIELD_POINTS.items():
+        keypoint_positions.append((kx, ky))
+        keypoint_positions.append((105.0 - kx, ky))
+
+    for kx, ky in keypoint_positions:
+        cx = int((kx / 105.0) * w_hm)
+        cy = int((ky / 68.0) * h_hm)
+        x_min = max(0, cx - radius_bins_x)
+        x_max = min(w_hm, cx + radius_bins_x + 1)
+        y_min = max(0, cy - radius_bins_y)
+        y_max = min(h_hm, cy + radius_bins_y + 1)
+        heatmap[y_min:y_max, x_min:x_max] = 0
+
 
 class ConnectionManager:
     def __init__(self):
@@ -275,8 +339,16 @@ async def generate_keypoints_heatmap(data_file, team_id: int, session_id: str):
             return JSONResponse({"success": False, "error": f"No hay datos para team {team_id}"}, status_code=404)
         
         # Extraer posiciones
-        xs = [p['position'][0] for p in team_data]
-        ys = [p['position'][1] for p in team_data]
+        raw_positions = [(p['position'][0], p['position'][1]) for p in team_data if 'position' in p]
+        filtered_positions = _filter_heatmap_positions(raw_positions)
+        if not filtered_positions:
+            logger.warning(f"Sin posiciones válidas tras filtrado para team {team_id}")
+            return JSONResponse(
+                {"success": False, "error": f"Sin posiciones válidas para team {team_id} tras filtrado"},
+                status_code=404
+            )
+        xs = [p[0] for p in filtered_positions]
+        ys = [p[1] for p in filtered_positions]
         
         # Crear heatmap 2D
         heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=50, 
@@ -341,7 +413,7 @@ async def generate_keypoints_heatmap(data_file, team_id: int, session_id: str):
                  cmap=cmap, alpha=0.75, interpolation='gaussian', vmin=0, vmax=1)
         
         # Título
-        ax.set_title(f'Team {team_id} Heatmap - Basado en Keypoints\n({len(team_data)} posiciones)',
+        ax.set_title(f'Team {team_id} Heatmap - Basado en Keypoints\n({len(filtered_positions)} posiciones válidas)',
                     fontsize=16, fontweight='bold', color=title_color, pad=20)
         
         ax.set_xlim(0, 105)
@@ -385,13 +457,6 @@ async def get_heatmap(session_id: str, team_id: int):
             BASE_DIR / "outputs_heatmap" / f"heatmap_data_{session_id}.json",
             BASE_DIR / "outputs_heatmap" / f"{session_id}_keypoints.json",
         ]
-        
-        # Buscar todos los archivos JSON en outputs_heatmap
-        heatmap_dir = BASE_DIR / "outputs_heatmap"
-        if heatmap_dir.exists():
-            json_files = sorted(heatmap_dir.glob("heatmap_data_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if json_files:
-                keypoints_paths.insert(0, json_files[0])  # Usar el más reciente
         
         keypoints_heatmap_path = None
         for path in keypoints_paths:
@@ -442,6 +507,17 @@ async def get_heatmap(session_id: str, team_id: int):
             return JSONResponse({"success": False, "error": f"Heatmap para team {team_id} no encontrado"}, status_code=404)
         
         logger.info(f"Heatmap cargado para team {team_id}, shape: {heatmap.shape}, sum={heatmap.sum():.2f}")
+
+        # Filtrar bordes en render para evitar outliers en ejecuciones antiguas
+        h_hm, w_hm = heatmap.shape
+        margin_x_bins = max(1, int((HEATMAP_GOAL_LINE_MARGIN_M / 105.0) * w_hm))
+        margin_y_bins = max(0, int((HEATMAP_SIDELINE_MARGIN_M / 68.0) * h_hm))
+        heatmap[:, :margin_x_bins] = 0
+        heatmap[:, w_hm - margin_x_bins:] = 0
+        if margin_y_bins > 0:
+            heatmap[:margin_y_bins, :] = 0
+            heatmap[h_hm - margin_y_bins:, :] = 0
+        _mask_keypoint_bins(heatmap)
         
         # Validar que haya datos
         if heatmap.sum() == 0:
@@ -562,16 +638,17 @@ async def get_heatmap_summary(session_id: str):
     logger = logging.getLogger(__name__)
     
     try:
-        # OPCIÓN 1: Buscar heatmap basado en keypoints
-        heatmap_dir = BASE_DIR / "outputs_heatmap"
+        # OPCIÓN 1: Buscar heatmap basado en keypoints para ESTA sesión
+        keypoints_candidates = [
+            BASE_DIR / "outputs_heatmap" / f"heatmap_data_{session_id}.json",
+            BASE_DIR / "outputs_heatmap" / f"{session_id}_keypoints.json",
+        ]
         keypoints_heatmap_path = None
-        
-        if heatmap_dir.exists():
-            json_files = sorted(heatmap_dir.glob("heatmap_data_*.json"), 
-                              key=lambda p: p.stat().st_mtime, reverse=True)
-            if json_files:
-                keypoints_heatmap_path = json_files[0]
-                logger.info(f"✓ Usando heatmap de keypoints: {keypoints_heatmap_path}")
+        for candidate in keypoints_candidates:
+            if candidate.exists():
+                keypoints_heatmap_path = candidate
+                logger.info(f"✓ Usando heatmap de keypoints de sesión: {keypoints_heatmap_path}")
+                break
         
         if keypoints_heatmap_path:
             # Cargar datos de keypoints
@@ -585,12 +662,14 @@ async def get_heatmap_summary(session_id: str):
             heatmaps = []
             for team_data in [team_0_data, team_1_data]:
                 if team_data:
-                    xs = [p['position'][0] for p in team_data]
-                    ys = [p['position'][1] for p in team_data]
+                    raw_positions = [(p['position'][0], p['position'][1]) for p in team_data if 'position' in p]
+                    filtered_positions = _filter_heatmap_positions(raw_positions)
+                    xs = [p[0] for p in filtered_positions]
+                    ys = [p[1] for p in filtered_positions]
                     heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=50, 
                                                               range=[[0, 105], [0, 68]])
                     heatmap_smooth = gaussian_filter(heatmap.T, sigma=2)
-                    heatmaps.append((heatmap_smooth, xedges, yedges, len(team_data)))
+                    heatmaps.append((heatmap_smooth, xedges, yedges, len(filtered_positions)))
                 else:
                     heatmaps.append((np.zeros((50, 50)), None, None, 0))
             
@@ -680,8 +759,26 @@ async def get_heatmap_summary(session_id: str):
         
         # Cargar datos
         data = np.load(str(heatmap_path), allow_pickle=True)
-        heatmap_0 = data['team_0_heatmap']
-        heatmap_1 = data['team_1_heatmap']
+        if 'team_0_heatmap_flip' in data:
+            heatmap_0 = data['team_0_heatmap_flip']
+        else:
+            heatmap_0 = data['team_0_heatmap']
+        if 'team_1_heatmap_flip' in data:
+            heatmap_1 = data['team_1_heatmap_flip']
+        else:
+            heatmap_1 = data['team_1_heatmap']
+
+        # Filtrar bordes en render para evitar outliers en ejecuciones antiguas
+        for hm in (heatmap_0, heatmap_1):
+            h_hm, w_hm = hm.shape
+            margin_x_bins = max(1, int((HEATMAP_GOAL_LINE_MARGIN_M / 105.0) * w_hm))
+            margin_y_bins = max(0, int((HEATMAP_SIDELINE_MARGIN_M / 68.0) * h_hm))
+            hm[:, :margin_x_bins] = 0
+            hm[:, w_hm - margin_x_bins:] = 0
+            if margin_y_bins > 0:
+                hm[:margin_y_bins, :] = 0
+                hm[h_hm - margin_y_bins:, :] = 0
+            _mask_keypoint_bins(hm)
         
         # Normalizar
         heatmap_0_norm = heatmap_0 / heatmap_0.max() if heatmap_0.max() > 0 else heatmap_0

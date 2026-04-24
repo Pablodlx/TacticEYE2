@@ -78,6 +78,12 @@ KEYPOINT_PRIORITY = {
     'corner': 40,
 }
 
+# Filtro anti-outliers para heatmap:
+# descartamos proyecciones muy pegadas a líneas de fondo/porterías,
+# donde suelen aparecer errores de homografía.
+HEATMAP_GOAL_LINE_MARGIN_M = 2.0
+HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M = 1.2
+
 
 @dataclass
 class ChunkOutput:
@@ -511,6 +517,35 @@ class BatchProcessor:
         cv2.putText(frame, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         
         return frame
+
+    def _is_valid_for_heatmap(self, field_pos: np.ndarray) -> bool:
+        """
+        Valida si una posición de campo es apta para acumular en heatmap.
+        Filtra outliers cerca de las líneas de gol y puntos anclados a keypoints.
+        """
+        if field_pos is None:
+            return False
+        if np.isnan(field_pos).any():
+            return False
+
+        x, y = float(field_pos[0]), float(field_pos[1])
+        if not (0.0 <= x <= FIELD_LENGTH and 0.0 <= y <= FIELD_WIDTH):
+            return False
+
+        # Rechazar puntos sospechosos en líneas de fondo/porterías
+        if x <= HEATMAP_GOAL_LINE_MARGIN_M or x >= (FIELD_LENGTH - HEATMAP_GOAL_LINE_MARGIN_M):
+            return False
+
+        # Rechazar puntos sospechosos demasiado pegados a keypoints del modelo.
+        # Evaluamos keypoints en orientación normal y flipped para cubrir ambos lados.
+        for _, (kx, ky) in FIELD_POINTS.items():
+            if np.hypot(x - kx, y - ky) <= HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M:
+                return False
+            kx_flip = FIELD_LENGTH - kx
+            if np.hypot(x - kx_flip, y - ky) <= HEATMAP_KEYPOINT_EXCLUSION_RADIUS_M:
+                return False
+
+        return True
     
     def process_chunk(
         self,
@@ -562,20 +597,25 @@ class BatchProcessor:
         best_homography_num_kp = 0  # Número de keypoints de la mejor homografía
         best_frame_keypoints = None  # Keypoints del frame con mejor homografía
         
+        # Inferencia YOLO por batch (más rápida que frame a frame en GPU)
+        yolo_results = self.model.predict(
+            frames,
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            imgsz=self.imgsz,
+            verbose=False,
+            device=self.device
+        )
+
+        keypoint_detection_interval = 6  # Menos frecuencia para reducir coste de inferencia de keypoints
+
         # Procesar cada frame del chunk
         current_keypoints = None
         for i, frame in enumerate(frames):
             frame_idx = start_frame_idx + i
             
             # 1. DETECCIÓN YOLO
-            results = self.model.predict(
-                frame,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                imgsz=self.imgsz,
-                verbose=False,
-                device=self.device
-            )[0]
+            results = yolo_results[i]
             
             # Parsear detecciones
             boxes = []
@@ -629,7 +669,7 @@ class BatchProcessor:
                     obj['team_id'] = -1
             
             # 3.5. DETECCIÓN DE KEYPOINTS (antes de visualización)
-            if self.use_keypoints and self.keypoints_detector is not None and frame_idx % 3 == 0:
+            if self.use_keypoints and self.keypoints_detector is not None and frame_idx % keypoint_detection_interval == 0:
                 try:
                     current_keypoints = self.keypoints_detector.detect_keypoints(frame)
                 except Exception as e:
@@ -718,6 +758,8 @@ class BatchProcessor:
                 # Acumular posiciones en píxeles durante el batch (proyección al final)
                 if self.heatmap_accumulator is not None and current_keypoints:
                     try:
+                        H = None
+                        is_flipped = best_homography_is_flipped
                         # Convertir formato de keypoints al esperado por el sistema
                         frame_keypoints = [
                             {"cls_name": name, "xy": coords, "conf": 0.9}
@@ -755,6 +797,10 @@ class BatchProcessor:
                                 bbox = obj['bbox']
                                 center_x = (bbox[0] + bbox[2]) / 2
                                 center_y = (bbox[1] + bbox[3]) / 2
+                                # Usar ancla de pies (centro inferior) para proyección al campo.
+                                # Reduce el sesgo respecto a keypoints/líneas cuando la cámara tiene perspectiva.
+                                foot_x = center_x
+                                foot_y = bbox[3]
 
                                 # NEW: Optical flow fallback setup (ONLY IF ENABLED)
                                 # Obtener pos fallback de optical flow para jugadores que fueron ocluidos
@@ -763,98 +809,90 @@ class BatchProcessor:
                                 if self.optical_flow_tracker is not None:
                                     of_fallback = self.optical_flow_tracker.update(
                                         frame_rgb=frame,
-                                        current_detections_px=[(center_x, center_y)],
+                                        current_detections_px=[(foot_x, foot_y)],
                                         track_ids=[track_id],
                                         fps=fps
                                     )
                                     of_confidence = self.optical_flow_tracker.get_confidence(track_id)
 
-                                # PROYECTAR frame a frame usando keypoints del FRAME ACTUAL (no acumulados)
-                                # Esto evita problemas cuando la cámara cambia de ángulo
-                                # SOLO si tenemos suficientes keypoints y el detector está funcionando
-                                if current_keypoints and len(current_keypoints) >= 3:
-                                    # Convertir diccionario de keypoints a lista para project_points_by_triangulation
-                                    # current_keypoints es {name: (x, y)}, necesitamos [{"cls_name": name, "xy": (x,y), "conf": 1.0}]
+                                # Proyección robusta por prioridad:
+                                # 1) Homografía del frame actual, 2) Mejor homografía del batch,
+                                # 3) Triangulación local, 4) Optical flow fallback.
+                                field_pos = None
+                                confidence = 0.0
+
+                                if H is not None:
+                                    try:
+                                        proj = project_points(H, np.array([[foot_x, foot_y]], dtype=np.float32))[0]
+                                        if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 1.0
+                                    except Exception:
+                                        pass
+
+                                if field_pos is None and best_homography_batch is not None:
+                                    try:
+                                        proj = project_points(
+                                            best_homography_batch,
+                                            np.array([[foot_x, foot_y]], dtype=np.float32)
+                                        )[0]
+                                        if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 0.85
+                                    except Exception:
+                                        pass
+
+                                if field_pos is None and current_keypoints and len(current_keypoints) >= 3:
                                     current_keypoints_list = [
                                         {"cls_name": name, "xy": coords, "conf": 1.0}
                                         for name, coords in current_keypoints.items()
                                     ]
-
-                                    # Usar keypoints detectados en este frame específico
-                                    pixel_pos = [(center_x, center_y)]
-                                    field_coords = project_points_by_triangulation(
-                                        pixel_pos,
-                                        current_keypoints_list,  # Lista de keypoints del frame actual
+                                    tri_coords = project_points_by_triangulation(
+                                        [(foot_x, foot_y)],
+                                        current_keypoints_list,
                                         FIELD_POINTS,
-                                        best_homography_is_flipped,
+                                        is_flipped,
                                         min_references=2,
                                         max_references=4
                                     )
+                                    if tri_coords is not None and len(tri_coords) > 0:
+                                        proj = tri_coords[0]
+                                        if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
+                                            is_valid, _ = self.trajectory_validator.validate(track_id, proj, frame_idx)
+                                            if is_valid:
+                                                field_pos = proj
+                                                confidence = 0.55
 
-                                    # NEW: Validar proyección y usar fallback si es necesario
-                                    field_pos = None
-                                    confidence = 1.0
+                                if field_pos is None and track_id in of_fallback:
+                                    of_pos_px = of_fallback[track_id]
+                                    scale_px_per_m = 10.0
+                                    field_pos = np.array([
+                                        of_pos_px[0] / scale_px_per_m,
+                                        of_pos_px[1] / scale_px_per_m
+                                    ])
+                                    confidence = of_confidence * 0.4
 
-                                    if field_coords is not None and len(field_coords) > 0:
-                                        projected = field_coords[0]
+                                # Aplicar Kalman smoothing si tenemos posición
+                                if self._is_valid_for_heatmap(field_pos):
+                                    field_pos = self.position_smoother.smooth(
+                                        track_id, field_pos, confidence, is_detected=True
+                                    )
 
-                                        # Check if valid (not NaN, within field)
-                                        if not np.isnan(projected).any():
-                                            if 0 <= projected[0] <= FIELD_LENGTH and 0 <= projected[1] <= FIELD_WIDTH:
-                                                # Validar físicamente con TrajectoryValidator
-                                                is_valid, _ = self.trajectory_validator.validate(
-                                                    track_id, projected, frame_idx
-                                                )
-                                                if is_valid:
-                                                    field_pos = projected
-                                                    confidence = 1.0
+                                    # Inicializar acumulador para este ID si no existe
+                                    if track_id not in player_field_positions_accumulator:
+                                        player_field_positions_accumulator[track_id] = {
+                                            'team_id': team_id,
+                                            'field_positions': []
+                                        }
 
-                                    # NEW: Fallback si triangulation falló
-                                    # PRIORIDAD: 1) Optical flow propagation, 2) Homography, 3) Last resort naive scale
-                                    if field_pos is None:
-                                        # Try optical flow first
-                                        if track_id in of_fallback:
-                                            of_pos_px = of_fallback[track_id]
-                                            scale_px_per_m = 10.0  # Conservative fallback
-                                            field_pos = np.array([
-                                                of_pos_px[0] / scale_px_per_m,
-                                                of_pos_px[1] / scale_px_per_m
-                                            ])
-                                            confidence = of_confidence * 0.8  # Reduce confidence for fallback
-
-                                        # If optical flow also failed, try homography on current player position
-                                        if field_pos is None and best_homography_batch is not None:
-                                            try:
-                                                h_projection = project_points(
-                                                    best_homography_batch,
-                                                    np.array([[center_x, center_y]])
-                                                )
-                                                proj = h_projection[0]
-                                                if not np.isnan(proj).any() and 0 <= proj[0] <= FIELD_LENGTH and 0 <= proj[1] <= FIELD_WIDTH:
-                                                    field_pos = proj
-                                                    confidence = 0.6  # Reduced confidence for homography fallback
-                                            except Exception as e:
-                                                pass  # Fallback to last resort below
-
-                                    # Aplicar Kalman smoothing si tenemos posición
-                                    if field_pos is not None:
-                                        field_pos = self.position_smoother.smooth(
-                                            track_id, field_pos, confidence, is_detected=True
-                                        )
-
-                                    # Acumular si es válida
-                                    if field_pos is not None and not np.isnan(field_pos).any():
-                                        # Inicializar acumulador para este ID si no existe
-                                        if track_id not in player_field_positions_accumulator:
-                                            player_field_positions_accumulator[track_id] = {
-                                                'team_id': team_id,
-                                                'field_positions': []
-                                            }
-
-                                        # Acumular posición PROYECTADA (en coordenadas de campo)
-                                        player_field_positions_accumulator[track_id]['field_positions'].append(
-                                            (field_pos[0], field_pos[1])
-                                        )
+                                    # Acumular posición PROYECTADA (en coordenadas de campo)
+                                    player_field_positions_accumulator[track_id]['field_positions'].append(
+                                        (field_pos[0], field_pos[1])
+                                    )
                     
                     except Exception as e:
                         if frame_idx % 60 == 0:

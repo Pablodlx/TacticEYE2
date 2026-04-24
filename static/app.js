@@ -633,6 +633,10 @@ function showResults(stats) {
     if (summaryBtnContainer) {
         summaryBtnContainer.style.display = 'block';
     }
+    const finalSummaryBtnContainer = document.getElementById('final-heatmap-summary-btn-container');
+    if (finalSummaryBtnContainer) {
+        finalSummaryBtnContainer.style.display = 'block';
+    }
 
     // Actualizar estadísticas espaciales finales si están disponibles
     if (stats.spatial) {
@@ -695,13 +699,13 @@ function showResults(stats) {
         console.log('Timeline vacío o no inicializado');
     }
 
-    // IMPORTANTE: Actualizar heatmaps cuando el análisis termina
-    // Esperar un momento para que los archivos se guarden
+    // IMPORTANTE: Actualizar heatmaps cuando el análisis termina.
+    // Reintento para asegurar disponibilidad de archivos.
     if (currentSessionId) {
-        console.log('Programando carga de heatmaps finales...');
         setTimeout(() => {
-            console.log('Cargando heatmaps finales...');
             updateHeatmapImages();
+            updateFinalHeatmapImages();
+            setTimeout(() => updateFinalHeatmapImages(), 2000);
         }, 1000);
     }
 }
@@ -1049,6 +1053,23 @@ function updateHeatmapImages() {
         heatmapTeam1.src = url;
     } else {
         console.error('No se encontró elemento heatmap-team-1');
+    }
+}
+
+function updateFinalHeatmapImages() {
+    if (!currentSessionId) {
+        return;
+    }
+
+    const timestamp = new Date().getTime();
+    const finalHeatmapTeam0 = document.getElementById('final-heatmap-team-0');
+    const finalHeatmapTeam1 = document.getElementById('final-heatmap-team-1');
+
+    if (finalHeatmapTeam0) {
+        finalHeatmapTeam0.src = `/api/heatmap/${currentSessionId}/0?t=${timestamp}`;
+    }
+    if (finalHeatmapTeam1) {
+        finalHeatmapTeam1.src = `/api/heatmap/${currentSessionId}/1?t=${timestamp}`;
     }
 }
 
